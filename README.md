@@ -90,16 +90,28 @@ that needs to resist attack; anything that does (AES, RSA, HMAC) uses
 Web Crypto, full stop.
 
 **QR code scope note:** the hand-written QR encoder/decoder supports byte
-mode, versions 1-4, and error-correction levels L/M only (roughly 14-78
-bytes of capacity depending on version/level). This was a deliberate scope
-cut: versions 1-4 need only a single Reed-Solomon block each, avoiding the
-more error-prone multi-block codeword-interleaving logic that higher
-versions and EC levels Q/H require. The decoder reads back this project's
-own generated matrices (and clean, axis-aligned scans) correctly — verified
-by round-trip tests and a live browser check — but it is not a full
-perspective-correcting photo scanner the way a production QR library is.
-Longer payloads (e.g. a very long URL) will get a clear "input too long"
-error rather than silently failing.
+mode, versions 1-4, and error-correction levels L/M — **with one exception:
+Version 4 / Level M is not supported.** Per ISO/IEC 18004, V4/M is the one
+combo in this range that requires 2 interleaved Reed-Solomon blocks rather
+than a single block; every other version/level combo this encoder handles
+(V1-4 at L, V1-3 at M) is a genuine single RS block. An earlier build
+incorrectly treated V4/M as a single block, which produced spec-invalid
+codes that this project's own round-trip test didn't catch (it just reads
+back whatever bytes were written) but which failed to scan entirely against
+an independent scanner (verified with `zbarimg`/pyzbar — 20/20 test strings
+in the affected byte range failed to decode). Rather than implement real
+multi-block RS interleaving (a bigger feature, not worth the risk), V4/M is
+simply excluded: if you request Level M with an input long enough to need
+it (roughly 43-62 bytes), the encoder transparently falls back to Level L
+instead (and reports the level it actually used); if the input doesn't fit
+at any supported version/level combo at all (beyond ~78 bytes), it throws a
+clear "input too large for supported QR levels, try a shorter string or
+Level L" error rather than silently producing a broken code. Effective byte
+capacity: V1-L=17, V1-M=14, V2-L=32, V2-M=26, V3-L=53, V3-M=42, V4-L=78 (no
+V4-M). The decoder reads back this project's own generated matrices (and
+clean, axis-aligned scans) correctly — verified by round-trip tests and a
+live browser check — but it is not a full perspective-correcting photo
+scanner the way a production QR library is.
 
 ## Tool list
 
@@ -127,7 +139,7 @@ error rather than silently failing.
 | EXIF metadata viewer/stripper | Working |
 | CIDR/subnet calculator (IPv4 + basic IPv6) | Working |
 | Regex tester + common-pattern library | Working |
-| QR code generate + decode | Working (scoped to versions 1-4, levels L/M — see above) |
+| QR code generate + decode | Working (scoped to versions 1-4, levels L/M except V4/M, which is unsupported and falls back to Level L — see above) |
 
 ### v2 (additive, same app)
 
@@ -137,7 +149,7 @@ error rather than silently failing.
 | Recipe export/import (URL param / JSON) | Working |
 | X.509 certificate/PEM decoder | Working (hand-written ASN.1/DER TLV parser; cross-validated against Node's built-in `X509Certificate` on a locally-generated test cert) |
 | Common-password hash-lookup demo (300-entry, capped) | Working — clearly labeled educational, not a cracking tool |
-| WHOIS lookup (RDAP, external API, disclosed) | Working |
+| WHOIS lookup (RDAP, external API, disclosed) | Working (shows a friendly "No WHOIS record found for this domain." message for unregistered domains instead of a raw JSON-parse error) |
 | DNS lookup (dns.google, external API, disclosed) | Working |
 | Phishing URL heuristic checker | Working (pure client-side heuristics; note: the lookalike-domain check uses a naive "last two labels" registrable-domain guess, which can miss domains under multi-part public suffixes like `.co.uk` or when a lookalike brand name is used as a *subdomain* rather than the registrable domain — the other heuristics, e.g. subdomain depth/keywords/hyphens/IP-literal/punycode, still catch most such cases) |
 | File type / magic-byte identifier | Working |

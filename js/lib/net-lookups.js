@@ -89,8 +89,34 @@ export async function lookupDns(name, type = 'A', fetchImpl) {
   return parseDnsResponse(json);
 }
 
+/**
+ * WHOIS/RDAP lookup for a domain. Unregistered/not-found domains commonly
+ * come back from RDAP bootstrap redirects (rdap.org -> the registry's own
+ * RDAP server) as an HTTP 404 with an EMPTY response body (confirmed against
+ * the live rdap.org endpoint) rather than a JSON error object. Calling
+ * `res.json()` on an empty body throws a raw, technical
+ * "Unexpected end of JSON input" SyntaxError — not useful to an end user.
+ * Catch that failure mode here and surface a friendly, unambiguous message
+ * instead.
+ */
 export async function lookupWhois(domain, fetchImpl) {
-  const json = await fetchJson(buildRdapUrl(domain), fetchImpl);
+  const impl = fetchImpl || globalThis.fetch;
+  if (!impl) throw new Error('No fetch implementation available');
+  const res = await impl(buildRdapUrl(domain));
+  let json;
+  try {
+    json = await res.json();
+  } catch (parseErr) {
+    // Empty or non-JSON body — no RDAP record for this domain (or the
+    // registry endpoint is unavailable). Either way, not a real error to
+    // surface raw to the user.
+    throw new Error('No WHOIS record found for this domain.');
+  }
+  if (!res.ok) {
+    // Some RDAP servers return a JSON error object with a 404 (e.g.
+    // { errorCode: 404, title: 'NOT FOUND' }) instead of an empty body.
+    throw new Error('No WHOIS record found for this domain.');
+  }
   return parseRdapResponse(json);
 }
 

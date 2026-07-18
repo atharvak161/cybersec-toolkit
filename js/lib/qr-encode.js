@@ -7,12 +7,28 @@
  * this project's sandbox does not allow executing a third-party
  * reference decoder to cross-verify against, so scope was capped to
  * the range that could be implemented and self-verified with highest
- * confidence (versions 1-4 need only a SINGLE Reed-Solomon block each,
- * avoiding the more error-prone multi-block interleaving logic).
- * Round-trip verified against this project's own js/lib/qr-decode.js.
+ * confidence (single-block-only Reed-Solomon, avoiding the more
+ * error-prone multi-block interleaving logic).
+ *
+ * IMPORTANT EXCEPTION — Version 4 / Level M is NOT supported: per
+ * ISO/IEC 18004, V4/M is actually 2 interleaved RS blocks (32 data +
+ * 18 ecc codewords EACH = 64 data / 36 ecc codewords total), not a
+ * single block. An earlier revision of this file incorrectly modeled
+ * it as one block with only 18 ecc codewords total, which produced
+ * spec-invalid codes that this project's own round-trip test couldn't
+ * catch (it just reads back whatever was written) but which a real
+ * scanner (verified with zbarimg) could not decode at all — 20/20
+ * failures across the 43-62 byte input range that selects V4/M. Every
+ * other version/level combo this encoder supports (V1-4 at L, V1-3 at
+ * M) is a genuine single RS block and round-trips correctly against
+ * independent scanners. Rather than implement real multi-block RS
+ * interleaving (a bigger feature, not worth the risk right now),
+ * V4/M is simply excluded: inputs that would have needed it fall back
+ * to V4/Level L if they fit, otherwise the encoder throws a clear
+ * "input too large" error instead of silently emitting a broken code.
  *
  * Byte-mode capacity (this implementation): V1-L=17, V1-M=14, V2-L=32,
- * V2-M=26, V3-L=53, V3-M=42, V4-L=78, V4-M=62 bytes.
+ * V2-M=26, V3-L=53, V3-M=42, V4-L=78. V4-M is unsupported (see above).
  */
 
 // ---------- GF(256) arithmetic (primitive poly 0x11d, used by QR's Reed-Solomon) ----------
@@ -65,12 +81,16 @@ function rsComputeEcc(dataCodewords, eccCount) {
 }
 
 // ---------- Version capacity table (byte mode, single-block only: versions 1-4, L/M) ----------
+//
+// V4/M is deliberately absent: per spec it requires 2 interleaved RS blocks
+// (32 data + 18 ecc codewords EACH = 64 data / 36 ecc codewords total), which
+// this single-block-only encoder does not implement. See file header.
 
 export const QR_CAPACITY = {
   1: { L: { dataCodewords: 19, eccCodewords: 7 }, M: { dataCodewords: 16, eccCodewords: 10 } },
   2: { L: { dataCodewords: 34, eccCodewords: 10 }, M: { dataCodewords: 28, eccCodewords: 16 } },
   3: { L: { dataCodewords: 55, eccCodewords: 15 }, M: { dataCodewords: 44, eccCodewords: 26 } },
-  4: { L: { dataCodewords: 80, eccCodewords: 20 }, M: { dataCodewords: 64, eccCodewords: 18 } }
+  4: { L: { dataCodewords: 80, eccCodewords: 20 } }
 };
 
 export const ALIGNMENT_CENTER = { 1: null, 2: [18, 18], 3: [22, 22], 4: [26, 26] };
@@ -307,6 +327,15 @@ function evaluatePenalty(matrix) {
 
 /**
  * Encode text into a QR code matrix.
+ *
+ * Note on `level`: this is the *requested* level. If `level` is 'M' and the
+ * input's byte length would require the unsupported Version 4 / Level M
+ * combo (see file header), this function transparently falls back to a
+ * lower EC level (L) if the data fits there, and reports the level it
+ * actually used in the returned object's `level` field — never silently
+ * emits a broken V4/M code. Throws if the input doesn't fit any supported
+ * version/level combo at all.
+ *
  * @param {string} text
  * @param {'L'|'M'} [level='M']
  * @returns {{ version: number, level: string, size: number, maskPattern: number, matrix: number[][] }}
@@ -314,14 +343,23 @@ function evaluatePenalty(matrix) {
 export function qrEncode(text, level = 'M') {
   if (level !== 'L' && level !== 'M') throw new Error('This encoder supports EC levels L and M only');
   const bytes = new TextEncoder().encode(text);
-  const version = chooseVersion(bytes.length, level);
-  if (!version) {
-    const maxCap = QR_CAPACITY[4][level].dataCodewords - 3; // rough usable byte estimate
-    throw new Error(`Input too long for this encoder (versions 1-4 only): max ~${maxCap} bytes at level ${level}`);
+  let effectiveLevel = level;
+  let version = chooseVersion(bytes.length, level);
+
+  if (!version && level === 'M') {
+    // The input didn't fit any supported M-level version (V1-3/M cap out at 42
+    // bytes, and V4/M is unsupported — see file header). Fall back to a lower
+    // EC level (L) rather than ever falling through to the broken V4/M combo.
+    version = chooseVersion(bytes.length, 'L');
+    if (version) effectiveLevel = 'L';
   }
 
-  const dataCodewords = buildDataCodewords(bytes, version, level);
-  const eccCodewords = rsComputeEcc(dataCodewords, QR_CAPACITY[version][level].eccCodewords);
+  if (!version) {
+    throw new Error('input too large for supported QR levels, try a shorter string or Level L');
+  }
+
+  const dataCodewords = buildDataCodewords(bytes, version, effectiveLevel);
+  const eccCodewords = rsComputeEcc(dataCodewords, QR_CAPACITY[version][effectiveLevel].eccCodewords);
   const allCodewords = dataCodewords.concat(eccCodewords);
 
   const size = 17 + 4 * version;
@@ -354,12 +392,12 @@ export function qrEncode(text, level = 'M') {
   for (let maskPattern = 0; maskPattern < 8; maskPattern++) {
     const trial = matrix.map((row) => row.slice());
     placeDataBits(trial, functionMask, allCodewords, maskPattern);
-    writeFormatInfo(trial, level, maskPattern);
+    writeFormatInfo(trial, effectiveLevel, maskPattern);
     const penalty = evaluatePenalty(trial);
     if (!best || penalty < best.penalty) best = { matrix: trial, penalty, maskPattern };
   }
 
-  return { version, level, size, maskPattern: best.maskPattern, matrix: best.matrix.map((row) => row.map((v) => v === 1)) };
+  return { version, level: effectiveLevel, size, maskPattern: best.maskPattern, matrix: best.matrix.map((row) => row.map((v) => v === 1)) };
 }
 
 function writeFormatInfo(matrix, level, maskPattern) {

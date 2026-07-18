@@ -33,7 +33,7 @@ import { epochSecondsToIso, epochMillisToIso, isoToEpochSeconds, autoDetectEpoch
 import { diffLines, diffSummary } from '../js/lib/diff.js';
 import { lookupHashInDemoWordlist, SUPPORTED_ALGORITHMS } from '../js/lib/wordlist-lookup.js';
 import { COMMON_PASSWORDS_DEMO } from '../data/common-passwords.js';
-import { parseDnsResponse, parseRdapResponse, parseIpGeoResponse, buildDnsUrl, buildRdapUrl, buildIpGeoUrl } from '../js/lib/net-lookups.js';
+import { parseDnsResponse, parseRdapResponse, parseIpGeoResponse, buildDnsUrl, buildRdapUrl, buildIpGeoUrl, lookupWhois } from '../js/lib/net-lookups.js';
 import { qrEncode, QR_CAPACITY } from '../js/lib/qr-encode.js';
 import { qrDecode } from '../js/lib/qr-decode.js';
 
@@ -737,6 +737,49 @@ test('net-lookups: parses a synthetic ipapi.co response', () => {
   assert.equal(parsed.countryCode, 'US');
 });
 
+test('net-lookups: lookupWhois shows a friendly message (not a raw JSON parse error) for a nonexistent domain — empty-body 404', async () => {
+  // Mirrors the real rdap.org bootstrap-redirect behavior for an unregistered
+  // domain: HTTP 404 with a completely empty response body. Calling
+  // res.json() on that used to bubble up "Unexpected end of JSON input".
+  const fakeFetch = async () => ({
+    ok: false,
+    status: 404,
+    json: async () => { throw new SyntaxError('Unexpected end of JSON input'); }
+  });
+  await assert.rejects(
+    () => lookupWhois('this-domain-should-not-exist-zzqx.com', fakeFetch),
+    (err) => {
+      assert.equal(err.message, 'No WHOIS record found for this domain.');
+      assert.ok(!/Unexpected end of JSON/.test(err.message));
+      return true;
+    }
+  );
+});
+
+test('net-lookups: lookupWhois shows a friendly message for a JSON error-object 404', () => {
+  const fakeFetch = async () => ({
+    ok: false,
+    status: 404,
+    json: async () => ({ errorCode: 404, title: 'NOT FOUND' })
+  });
+  return assert.rejects(
+    () => lookupWhois('another-nonexistent-domain-zzqx.com', fakeFetch),
+    /No WHOIS record found for this domain\./
+  );
+});
+
+test('net-lookups: lookupWhois still parses a real successful RDAP response', async () => {
+  const sample = {
+    ldhName: 'EXAMPLE.COM',
+    status: ['active'],
+    nameservers: [],
+    events: []
+  };
+  const fakeFetch = async () => ({ ok: true, status: 200, json: async () => sample });
+  const result = await lookupWhois('example.com', fakeFetch);
+  assert.equal(result.domain, 'EXAMPLE.COM');
+});
+
 // ============================================================
 // QR encode/decode (hand-written, versions 1-4, round trip)
 // ============================================================
@@ -762,16 +805,39 @@ test('qr: encode/decode round trip — URL, level L, forces a larger version', (
 
 test('qr: throws a clear error when input exceeds encoder capacity', () => {
   const tooLong = 'x'.repeat(500);
-  assert.throws(() => qrEncode(tooLong, 'M'), /too long/);
+  assert.throws(() => qrEncode(tooLong, 'M'), /too large/);
 });
 
-test('qr: round trips across all four supported versions at level M', () => {
-  for (const version of [1, 2, 3, 4]) {
+test('qr: round trips across all three genuinely single-block versions at level M (V1-3)', () => {
+  for (const version of [1, 2, 3]) {
     const cap = QR_CAPACITY[version].M.dataCodewords - 3; // leave room for mode/count/terminator overhead
     const text = 'A'.repeat(Math.max(1, cap - 1));
-    const { matrix, version: actualVersion } = qrEncode(text, 'M');
+    const { matrix, version: actualVersion, level: actualLevel } = qrEncode(text, 'M');
     assert.ok(actualVersion <= version + 1);
+    assert.equal(actualLevel, 'M');
     const decoded = qrDecode(matrix);
     assert.equal(decoded.text, text);
   }
+});
+
+test('qr: Version 4 / Level M is unsupported (spec requires 2-block RS interleaving)', () => {
+  assert.equal(QR_CAPACITY[4].M, undefined);
+});
+
+test('qr: requesting level M with input in the old V4/M range (43-62 bytes) falls back to level L, never emits V4/M', () => {
+  for (let len = 43; len <= 62; len++) {
+    const text = 'A'.repeat(len);
+    const { version, level, matrix } = qrEncode(text, 'M');
+    // Must never resolve to the unsupported V4/M combo.
+    assert.ok(!(version === 4 && level === 'M'), `len=${len} incorrectly produced V4/M`);
+    assert.equal(level, 'L', `len=${len} should have fallen back to level L`);
+    const decoded = qrDecode(matrix);
+    assert.equal(decoded.text, text);
+    assert.equal(decoded.level, 'L');
+  }
+});
+
+test('qr: input too large even at level L throws the clear fallback error', () => {
+  const tooLong = 'A'.repeat(100); // beyond V4/L's 78-byte-ish cap
+  assert.throws(() => qrEncode(tooLong, 'M'), /input too large for supported QR levels, try a shorter string or Level L/);
 });
