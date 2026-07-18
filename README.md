@@ -1,5 +1,7 @@
 # cybersec-toolkit
 
+**Live demo: https://atharvak161.github.io/cybersec-toolkit/**
+
 A static, client-side-only cybersecurity utility toolkit. Plain HTML/CSS/JS,
 no build step, no framework, no bundler — open `index.html` (or serve the
 directory) and it runs. Nothing you type is ever sent to a server, except
