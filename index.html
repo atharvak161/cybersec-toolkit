@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cybersec-toolkit — client-side security utilities</title>
+<meta name="description" content="A static, client-side-only cybersecurity toolkit: encoding, hashing, crypto, recipe chaining, OSINT lookups, and more. Nothing is sent to a server except a few explicitly-disclosed lookups." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="logo">🛡️ cybersec-toolkit</span>
+      <div class="sidebar-sub">100% client-side · <a href="https://github.com/atharvak161/cybersec-toolkit" target="_blank" rel="noopener">source</a></div>
+    </div>
+    <nav id="nav" class="nav"></nav>
+    <div class="sidebar-footer">
+      <span id="ext-api-notice">🌐 = calls an external API (disclosed)</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button id="menu-toggle" class="menu-toggle" aria-label="Toggle navigation">☰</button>
+      <h1 id="tool-title">Welcome</h1>
+    </header>
+    <div id="content" class="content"></div>
+  </main>
+</div>
+
+<!-- Vendor: no third-party crypto/QR libraries are loaded here.
+     MD5 / SHA-3 / CRC32 / Punycode / QR encode+decode are hand-written
+     from public specifications in js/lib/vendor/ and js/lib/qr-*.js
+     (see README.md "Why hand-written instead of vendored" for why). -->
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

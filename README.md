@@ -1,0 +1,175 @@
+# cybersec-toolkit
+
+A static, client-side-only cybersecurity utility toolkit. Plain HTML/CSS/JS,
+no build step, no framework, no bundler — open `index.html` (or serve the
+directory) and it runs. Nothing you type is ever sent to a server, except
+four explicitly-disclosed tools that call a public read-only API (each is
+marked with a 🌐 badge in the UI and listed below).
+
+## Purpose & Ethical Use
+
+This toolkit exists for **education, learning, and legitimate security work**:
+CTF practice, verifying file integrity, inspecting your own JWTs/certificates,
+generating and testing your own passwords, understanding common attacker
+techniques (phishing heuristics, hash identification, steganography) well
+enough to defend against them, and general-purpose encoding/hashing/crypto
+utilities that any engineer or student runs into regularly.
+
+It is **not** intended for, and must not be used for:
+- Unauthorized access to systems, accounts, or data you do not own or have
+  explicit permission to test.
+- Harassment, stalking, or looking up information about a person without
+  their consent or a legitimate authorized context.
+- Real password cracking against production systems — the "common-password
+  hash lookup" tool is a 300-entry **educational demo**, clearly labeled as
+  such, not a real cracking tool (no large wordlists are bundled).
+- Actively scanning, enumerating, or probing third-party systems. The
+  OSINT/lookup tools (WHOIS, DNS, IP geolocation, phishing checker) only
+  query public, read-only data sources (a public DNS resolver, the IETF's
+  RDAP registry protocol, a public IP-geolocation API) or run pure
+  client-side heuristics — none of them perform active scanning or
+  enumeration of a target system.
+
+If you're unsure whether a use case is appropriate, don't do it.
+
+## What's client-side vs. external
+
+Everything in this toolkit runs entirely in your browser. The **only**
+exceptions — each shown with a 🌐 "calls an external API" badge in the UI —
+are:
+
+| Tool | External call | What's sent |
+|---|---|---|
+| HIBP Breach Check | `api.pwnedpasswords.com` (k-anonymity range API) | Only the first 5 hex characters of the SHA-1 hash of your password — never the password or full hash |
+| DNS Lookup | `dns.google` (Google Public DNS-over-HTTPS JSON API) | The domain name and record type you enter |
+| WHOIS Lookup | `rdap.org` (RDAP — the IETF/IANA-standardized WHOIS successor) | The domain name you enter |
+| IP Geolocation | `ipapi.co` | The IP address you enter |
+
+All four are free, public, no-API-key-required endpoints — no secret is
+baked into the client code (there's nothing to steal), and no user data is
+compiled or logged by this toolkit itself.
+
+## Architecture
+
+- No build step. `index.html` loads `js/app.js` as an ES module; everything
+  else is plain ES modules imported from there.
+- All pure logic (encode/decode/hash/crypto/parsing functions) lives in
+  `js/lib/*.js`, independent of the DOM, so it can be — and is — unit
+  tested directly with Node (see `test/run-tests.js`).
+  `js/ui/*.js` contains the (thin) DOM-wiring layer per tool category.
+- Any cryptography that Web Crypto supports (AES-GCM, RSA-OAEP, HMAC,
+  SHA-1/256/384/512) uses the browser-native `crypto.subtle` API —
+  never a hand-rolled implementation. See `js/lib/aes.js`, `js/lib/rsa.js`,
+  `js/lib/hashing.js`.
+
+### Why hand-written instead of vendored, for MD5/SHA-3/CRC32/Punycode/QR
+
+The original plan (per the brief) was to vendor small, pinned-version,
+well-known third-party implementations for the handful of hash algorithms
+Web Crypto doesn't support (MD5, SHA-3, CRC32), plus Punycode and a QR
+encode/decode library. While building this, the build environment's safety
+tooling declined to execute code fetched from a CDN by the agent (a
+code-provenance safety gate on running agent-downloaded third-party code) —
+so rather than ship un-vetted vendor files that were never actually
+exercised, every one of these was **hand-written directly from the public
+specification**:
+
+- `js/lib/vendor/md5.js` — RFC 1321
+- `js/lib/vendor/sha3.js` — FIPS 202 (Keccak-*f*[1600])
+- `js/lib/vendor/crc32.js` — the standard reflected CRC-32/ISO-HDLC algorithm
+- `js/lib/vendor/punycode.js` — RFC 3492 (Bootstring)
+- `js/lib/qr-encode.js` / `js/lib/qr-decode.js` — ISO/IEC 18004 (QR Code)
+
+Each cites its source specification in a header comment, and each is
+validated against the relevant standard's own published test vectors in
+`test/run-tests.js` (RFC 1321 vectors for MD5, NIST FIPS 202 vectors for
+SHA-3, the canonical CRC-32/ISO-HDLC check value, the RFC 3492 sample
+strings for Punycode). None of these are security-critical primitives —
+MD5/CRC32 are used only as legacy/checksum digests, never for anything
+that needs to resist attack; anything that does (AES, RSA, HMAC) uses
+Web Crypto, full stop.
+
+**QR code scope note:** the hand-written QR encoder/decoder supports byte
+mode, versions 1-4, and error-correction levels L/M only (roughly 14-78
+bytes of capacity depending on version/level). This was a deliberate scope
+cut: versions 1-4 need only a single Reed-Solomon block each, avoiding the
+more error-prone multi-block codeword-interleaving logic that higher
+versions and EC levels Q/H require. The decoder reads back this project's
+own generated matrices (and clean, axis-aligned scans) correctly — verified
+by round-trip tests and a live browser check — but it is not a full
+perspective-correcting photo scanner the way a production QR library is.
+Longer payloads (e.g. a very long URL) will get a clear "input too long"
+error rather than silently failing.
+
+## Tool list
+
+### v1
+
+| Tool | Status |
+|---|---|
+| Hex encode/decode | Working |
+| Base64 encode/decode | Working |
+| Base32 encode/decode | Working |
+| Base58 encode/decode | Working |
+| URL encode/decode | Working |
+| Binary encode/decode | Working |
+| ROT13 / Caesar cipher | Working |
+| MD5 / SHA-1 / SHA-256 / SHA-512 / SHA-3-256 / CRC32 (Hash Generator) | Working |
+| HMAC generator (HS1/256/384/512) | Working |
+| Hash-type identifier | Working (heuristic — many algorithms share output lengths) |
+| File hash checker (drag a file, get its hashes) | Working |
+| JWT decoder/inspector (flags `alg:none`, expiry, optional HMAC verify) | Working |
+| AES-GCM encrypt/decrypt (Web Crypto, PBKDF2-derived key) | Working |
+| RSA keypair generation + encrypt/decrypt (Web Crypto, RSA-OAEP) | Working |
+| Recipe chaining (CyberChef-lite, drag-to-reorder, live output) | Working — the standout feature |
+| Password strength / entropy analyzer | Working |
+| HIBP breach check (k-anonymity, external API, disclosed) | Working |
+| EXIF metadata viewer/stripper | Working |
+| CIDR/subnet calculator (IPv4 + basic IPv6) | Working |
+| Regex tester + common-pattern library | Working |
+| QR code generate + decode | Working (scoped to versions 1-4, levels L/M — see above) |
+
+### v2 (additive, same app)
+
+| Tool | Status |
+|---|---|
+| Steganography LSB detect/extract (images) | Working — educational, labeled as such |
+| Recipe export/import (URL param / JSON) | Working |
+| X.509 certificate/PEM decoder | Working (hand-written ASN.1/DER TLV parser; cross-validated against Node's built-in `X509Certificate` on a locally-generated test cert) |
+| Common-password hash-lookup demo (300-entry, capped) | Working — clearly labeled educational, not a cracking tool |
+| WHOIS lookup (RDAP, external API, disclosed) | Working |
+| DNS lookup (dns.google, external API, disclosed) | Working |
+| Phishing URL heuristic checker | Working (pure client-side heuristics; note: the lookalike-domain check uses a naive "last two labels" registrable-domain guess, which can miss domains under multi-part public suffixes like `.co.uk` or when a lookalike brand name is used as a *subdomain* rather than the registrable domain — the other heuristics, e.g. subdomain depth/keywords/hyphens/IP-literal/punycode, still catch most such cases) |
+| File type / magic-byte identifier | Working |
+| Base85 (Ascii85), Base91, UUEncode | Working |
+| Punycode / IDN encode-decode | Working (hand-written, see above) |
+| Epoch/timestamp converter | Working |
+| IP geolocation lookup (ipapi.co, external API, disclosed) | Working |
+| Text diff tool | Working |
+
+## Running the tests
+
+```
+npm test
+# or
+node --test test/run-tests.js
+```
+
+`test/run-tests.js` uses only Node's built-in `node:test` + `node:assert` —
+no external test framework. It checks every pure logic module against
+known/published test vectors (RFC 1321 MD5 vectors, NIST SHA test vectors,
+RFC 4648 Base64/32 vectors, the IETF Base58 draft's vectors, the RFC 3492
+Punycode sample, AES/RSA encrypt-then-decrypt round trips via Node's own
+Web Crypto implementation, a real self-signed certificate generated with
+`openssl` and cross-checked against Node's built-in `X509Certificate`, and
+more).
+
+`test/manual-sanity-check.js` is a separate, human-readable script that
+exercises the recipe chain and several other tools end-to-end and prints
+before/after output for eyeballing.
+
+## Deployment
+
+Not part of this build phase. This is a static site with no server-side
+requirements — deploying it (GitHub Pages or any static host) is a
+separate, later step.

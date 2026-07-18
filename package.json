@@ -1,0 +1,13 @@
+{
+  "name": "cybersec-toolkit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Client-side, no-backend cybersecurity utility toolkit (encoding, hashing, crypto, recipe chaining, OSINT lookups, and more). Static HTML/CSS/JS, no build step.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/run-tests.js"
+  },
+  "engines": {
+    "node": ">=19"
+  }
+}
