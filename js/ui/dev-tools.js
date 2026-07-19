@@ -267,11 +267,29 @@ export const DEV_TOOLS = [
 
       runBtn.addEventListener('click', () => {
         clear(resultsBox);
-        const { flagged, hasMixedScript, scriptsSeen } = detectHomoglyphs(input.value);
-        if (flagged.length === 0) {
+        const { flagged, hasMixedScript, scriptsSeen, invisibleChars, hasInvisibleChars } = detectHomoglyphs(input.value);
+        if (flagged.length === 0 && !hasInvisibleChars) {
           resultsBox.appendChild(el('p', { style: 'color:var(--accent)' }, '✓ No known lookalike characters found.'));
           return;
         }
+
+        if (hasInvisibleChars) {
+          const invisibleCard = el('div', { class: 'card' });
+          invisibleCard.appendChild(el('p', { style: 'color:var(--danger); font-weight:600' },
+            `${invisibleChars.length} invisible/zero-width character${invisibleChars.length === 1 ? '' : 's'} found — contains invisible/zero-width characters (not a lookalike — a hidden-character injection).`
+          ));
+          const invisibleTable = el('table', { class: 'data-table' }, [
+            el('tr', {}, [el('th', {}, 'Position'), el('th', {}, 'Codepoint'), el('th', {}, 'Unicode name')]),
+            ...invisibleChars.map((f) => el('tr', {}, [
+              el('td', {}, String(f.index)), el('td', { class: 'tabular-nums' }, f.codepoint), el('td', {}, f.name)
+            ]))
+          ]);
+          invisibleCard.appendChild(invisibleTable);
+          resultsBox.appendChild(invisibleCard);
+        }
+
+        if (flagged.length === 0) return;
+
         const card = el('div', { class: 'card' });
         card.appendChild(el('p', { style: `color:${hasMixedScript ? 'var(--danger)' : 'var(--warning)'}; font-weight:600` },
           `${flagged.length} suspicious character${flagged.length === 1 ? '' : 's'} found${hasMixedScript ? ' — mixed scripts detected (' + scriptsSeen.join(', ') + ')' : ''}.`

@@ -181,9 +181,19 @@ export const FILES_TOOLS = [
       const errorNode = el('div', {});
       const resultsBox = el('div', {});
 
+      // Tracks the most recently created blob: URL for this tool's preview so
+      // it can be revoked before a new one is created — otherwise every
+      // preview in the session leaks a blob URL reference (never freed until
+      // page unload).
+      let currentObjectUrl = null;
+
       runBtn.addEventListener('click', () => {
         clear(errorNode);
         clear(resultsBox);
+        if (currentObjectUrl) {
+          URL.revokeObjectURL(currentObjectUrl);
+          currentObjectUrl = null;
+        }
         try {
           const { bytes, declaredMime, detected, sizeBytes, looksLikeImage } = parseBase64Image(input.value);
           const infoCard = el('div', { class: 'card' });
@@ -196,6 +206,7 @@ export const FILES_TOOLS = [
             const mime = detected.mime;
             const blob = new Blob([bytes], { type: mime });
             const url = URL.createObjectURL(blob);
+            currentObjectUrl = url;
             resultsBox.appendChild(el('img', { src: url, style: 'max-width:100%; border:1px solid var(--border); border-radius:var(--radius); margin-top:10px;' }));
           } else {
             resultsBox.appendChild(el('p', { class: 'error-box' }, 'Decoded bytes do not match a known image signature — nothing rendered.'));

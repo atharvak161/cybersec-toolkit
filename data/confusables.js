@@ -54,5 +54,46 @@ export const CONFUSABLES = [
   { char: '‐', looksLike: '-', script: 'Punctuation', name: 'HYPHEN' },
   { char: '−', looksLike: '-', script: 'Punctuation', name: 'MINUS SIGN' },
   { char: ' ', looksLike: ' ', script: 'Punctuation', name: 'NO-BREAK SPACE' },
-  { char: '⁄', looksLike: '/', script: 'Punctuation', name: 'FRACTION SLASH' }
+  { char: '⁄', looksLike: '/', script: 'Punctuation', name: 'FRACTION SLASH' },
+
+  // Full-width Latin letters (U+FF21-FF3A, U+FF41-FF5A) — used in real-world
+  // phishing/spoofing to visually mimic plain ASCII while evading naive
+  // substring/blacklist filters (e.g. full-width "ａ" vs ASCII "a").
+  ...fullwidthLatinConfusables()
+];
+
+/** Generates the 52 full-width Latin A-Z/a-z -> ASCII confusable entries. */
+function fullwidthLatinConfusables() {
+  const entries = [];
+  for (let i = 0; i < 26; i++) {
+    const upperAscii = String.fromCharCode(65 + i); // 'A'..'Z'
+    const lowerAscii = String.fromCharCode(97 + i); // 'a'..'z'
+    entries.push({
+      char: String.fromCodePoint(0xFF21 + i), // FULLWIDTH LATIN CAPITAL LETTER A..Z
+      looksLike: upperAscii,
+      script: 'Fullwidth',
+      name: `FULLWIDTH LATIN CAPITAL LETTER ${upperAscii}`
+    });
+    entries.push({
+      char: String.fromCodePoint(0xFF41 + i), // FULLWIDTH LATIN SMALL LETTER a..z
+      looksLike: lowerAscii,
+      script: 'Fullwidth',
+      name: `FULLWIDTH LATIN SMALL LETTER ${upperAscii}`
+    });
+  }
+  return entries;
+}
+
+// Zero-width / invisible characters used for injection/obfuscation (e.g.
+// splitting a blocked keyword so a naive filter misses it, or padding a
+// spoofed string so it visually matches a target while differing byte-for-
+// byte). These are NOT lookalikes of any specific visible character — they
+// render as nothing — so they're tracked separately from CONFUSABLES and
+// flagged by detectHomoglyphs() as their own "invisible character" category
+// rather than shoehorned into the confusable-pair ("looks like X") shape.
+export const INVISIBLE_CHARS = [
+  { char: String.fromCodePoint(0x200B), codepoint: 'U+200B', name: 'ZERO WIDTH SPACE' },
+  { char: String.fromCodePoint(0x200C), codepoint: 'U+200C', name: 'ZERO WIDTH NON-JOINER' },
+  { char: String.fromCodePoint(0x200D), codepoint: 'U+200D', name: 'ZERO WIDTH JOINER' },
+  { char: String.fromCodePoint(0xFEFF), codepoint: 'U+FEFF', name: 'ZERO WIDTH NO-BREAK SPACE (BOM)' }
 ];

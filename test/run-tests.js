@@ -951,6 +951,46 @@ test('password-gen: 100 generated passwords are not all identical (sanity floor)
   assert.ok(outputs.size > 1, 'expected variation across 100 generated passwords');
 });
 
+test('password-gen: all 4 sets selected always include at least one char from each (coverage guarantee)', () => {
+  const sets = {
+    upper: /[A-Z]/, lower: /[a-z]/, digits: /[0-9]/,
+    symbols: /[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/
+  };
+  for (let i = 0; i < 200; i++) {
+    const pwd = generatePassword({ length: 16 });
+    for (const [name, re] of Object.entries(sets)) {
+      assert.ok(re.test(pwd), `iteration ${i}: "${pwd}" missing required set "${name}"`);
+    }
+  }
+});
+
+test('password-gen: digit representation is roughly proportional to set size, not overrepresented (bias sanity check)', () => {
+  // Monte Carlo sanity check (not a tight statistical bound): with all 4
+  // default sets selected (26+26+10+27 = 89 chars), digits should make up
+  // close to their 10/89 ≈ 11.2% share of characters, not the ~19%+
+  // overrepresentation the old "always force one guaranteed digit"
+  // mechanism produced. Some residual skew above proportional is expected
+  // and acceptable (see js/lib/password-gen.js doc comment) — this just
+  // guards against the bias regressing back to its old magnitude.
+  const N = 4000;
+  const length = 20;
+  let digitCount = 0;
+  let totalCount = 0;
+  for (let i = 0; i < N; i++) {
+    const pwd = generatePassword({ length });
+    for (const c of pwd) {
+      totalCount++;
+      if (c >= '0' && c <= '9') digitCount++;
+    }
+  }
+  const observedFrac = digitCount / totalCount;
+  const expectedFrac = 10 / 89;
+  // Allow generous headroom for Monte Carlo noise + residual inherent skew,
+  // while still catching a regression back to the old ~19%+ overrepresentation.
+  assert.ok(observedFrac < expectedFrac * 1.5,
+    `digit frequency ${(observedFrac * 100).toFixed(2)}% is more than 1.5x the proportional ${(expectedFrac * 100).toFixed(2)}% expectation`);
+});
+
 // ============================================================
 // Diceware passphrase generator
 // ============================================================
@@ -1013,6 +1053,41 @@ test('homoglyph: pure-ASCII string is NOT flagged (no false positive)', () => {
 test('homoglyph: pure-Cyrillic string is NOT flagged as mixed-script (legitimate single-script text)', () => {
   const result = detectHomoglyphs('привет'); // "hello" in Russian, entirely Cyrillic
   assert.equal(result.hasMixedScript, false);
+});
+
+test('homoglyph: full-width Latin lookalike (U+FF41 fullwidth "a") IS flagged as a Fullwidth confusable', () => {
+  const spoofed = String.fromCodePoint(0xFF41) + 'pple.com'; // fullwidth a + "pple.com"
+  const result = detectHomoglyphs(spoofed);
+  assert.equal(result.hasMixedScript, true);
+  const hit = result.flagged.find((f) => f.codepoint === 'U+FF41');
+  assert.ok(hit, 'expected U+FF41 to be flagged');
+  assert.equal(hit.looksLike, 'a');
+  assert.equal(hit.script, 'Fullwidth');
+});
+
+test('homoglyph: zero-width space (U+200B) is flagged as invisibleChars, NOT as a confusable pair', () => {
+  const withZwsp = 'pay' + String.fromCodePoint(0x200B) + 'pal.com';
+  const result = detectHomoglyphs(withZwsp);
+  assert.equal(result.hasInvisibleChars, true);
+  assert.equal(result.invisibleChars.length, 1);
+  assert.equal(result.invisibleChars[0].codepoint, 'U+200B');
+  assert.equal(result.invisibleChars[0].name, 'ZERO WIDTH SPACE');
+  // Zero-width chars are not lookalikes of anything, so they must not leak
+  // into the confusable-pair `flagged` array.
+  assert.ok(!result.flagged.some((f) => f.codepoint === 'U+200B'));
+});
+
+test('homoglyph: BOM/zero-width-no-break-space (U+FEFF) is flagged as invisibleChars', () => {
+  const withBom = String.fromCodePoint(0xFEFF) + 'admin';
+  const result = detectHomoglyphs(withBom);
+  assert.equal(result.hasInvisibleChars, true);
+  assert.ok(result.invisibleChars.some((f) => f.codepoint === 'U+FEFF'));
+});
+
+test('homoglyph: plain ASCII has no invisible characters flagged', () => {
+  const result = detectHomoglyphs('login.example.com');
+  assert.equal(result.hasInvisibleChars, false);
+  assert.equal(result.invisibleChars.length, 0);
 });
 
 // ============================================================
