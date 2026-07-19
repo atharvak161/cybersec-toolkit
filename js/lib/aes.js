@@ -94,3 +94,34 @@ export async function aesDecrypt(blobBase64, passphrase) {
   const plainBuf = await subtle().decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
   return new TextDecoder().decode(plainBuf);
 }
+
+/**
+ * File (byte-level) AES-GCM encryption — same PBKDF2 + AES-256-GCM
+ * approach as aesEncrypt/aesDecrypt above, but operating on raw bytes
+ * (an entire file) instead of a UTF-8 string, and returning the packed
+ * [salt][iv][ciphertext+tag] blob as raw bytes rather than base64 (so a
+ * downloaded ".enc" file isn't inflated ~33% for no reason). Used by the
+ * File Encryption/Decryption tool.
+ */
+export async function aesEncryptBytes(plainBytes, passphrase) {
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LEN));
+  const key = await deriveKey(passphrase, salt);
+  const ciphertextBuf = await subtle().encrypt({ name: 'AES-GCM', iv }, key, plainBytes);
+  return concatBytes(salt, iv, new Uint8Array(ciphertextBuf));
+}
+
+/**
+ * Decrypt a byte blob produced by aesEncryptBytes using the same
+ * passphrase. Throws if the passphrase is wrong or the data is corrupt.
+ */
+export async function aesDecryptBytes(packedBytes, passphrase) {
+  const packed = packedBytes instanceof Uint8Array ? packedBytes : new Uint8Array(packedBytes);
+  if (packed.length < SALT_LEN + IV_LEN) throw new Error('Encrypted file too short / corrupt');
+  const salt = packed.slice(0, SALT_LEN);
+  const iv = packed.slice(SALT_LEN, SALT_LEN + IV_LEN);
+  const ciphertext = packed.slice(SALT_LEN + IV_LEN);
+  const key = await deriveKey(passphrase, salt);
+  const plainBuf = await subtle().decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return new Uint8Array(plainBuf);
+}

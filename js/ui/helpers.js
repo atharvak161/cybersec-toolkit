@@ -31,8 +31,27 @@ export function educationalBadge(text = 'Educational demo — not a real crackin
   return el('div', { class: 'educational-badge' }, `🎓 ${text}`);
 }
 
+/** Informational "authorized use only" tag for the Pentest & CTF Reference
+ * section — deliberately uses --info (blue), never --danger, per the v3
+ * design spec: this is professional-context tooling, not a warning. */
+export function authorizedUseBadge(text = 'For authorized penetration testing and CTF use only.') {
+  return el('div', { class: 'educational-badge' }, `ℹ️ ${text}`);
+}
+
+/**
+ * Tool description block. Accepts either a plain string (legacy call
+ * sites, rendered as a single paragraph) or a { what, when } copy object
+ * (see js/data/tool-copy.js) rendered as the standard two-line "what it
+ * does" / "when to use it" block used across every tool page.
+ */
 export function toolHeader(description) {
-  return el('p', { class: 'tool-desc' }, description);
+  if (typeof description === 'string') {
+    return el('p', { class: 'tool-desc' }, description);
+  }
+  return el('div', { class: 'tool-copy' }, [
+    el('p', { class: 'tool-copy-line' }, [el('strong', {}, 'What it does: '), description.what]),
+    el('p', { class: 'tool-copy-line' }, [el('strong', {}, 'When to use it: '), description.when])
+  ]);
 }
 
 export function errorBox(message) {

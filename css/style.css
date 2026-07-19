@@ -11,8 +11,33 @@
   --warning: #d29922;
   --info: #58a6ff;
   --radius: 6px;
+  --radius-lg: 10px; /* section-landing cards only — bigger radius signals "overview", not "tool" */
   --mono: 'SF Mono', 'Consolas', 'Menlo', 'Courier New', monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Type scale (v3) — hierarchy fix, no new sizes invented beyond what's below.
+     --text-sm/--text-base keep their existing values; named here for reference. */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 19px;
+  --text-xl: 26px;
+  --text-2xl: 34px;
+
+  /* Spacing scale (v3) — formalizes existing spacing values, none changed. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Motion tokens (v3) — exactly 3 purposeful transitions app-wide; see §4 of the design spec. */
+  --transition-fast: background-color 80ms ease, border-color 80ms ease, color 80ms ease;
+  --transition-content-enter: opacity 140ms ease-out, transform 140ms ease-out;
+  --transition-group-expand: grid-template-rows 150ms ease-out;
+  --transition-group-collapse: grid-template-rows 110ms ease-in;
 }
 
 * { box-sizing: border-box; }
@@ -91,12 +116,13 @@ html, body {
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-family: var(--sans);
+  transition: var(--transition-fast);
 }
 
 .nav-item:hover { background: rgba(255, 255, 255, 0.04); }
-.nav-item.active { background: rgba(63, 185, 80, 0.14); color: var(--accent); border-right: 2px solid var(--accent); }
+.nav-item.active { background: rgba(63, 185, 80, 0.14); color: var(--accent); border-right: 2px solid var(--accent); font-weight: 500; }
 
 .nav-item .badge {
   font-size: 11px;
@@ -109,6 +135,113 @@ html, body {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* ---------- Pinned Recipe Builder + divider (v3) ---------- */
+
+.nav-pinned { padding: 8px 0 0; }
+.nav-pinned .nav-item { font-weight: 500; }
+.nav-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 16px;
+}
+
+/* ---------- Quick-search box (v3) ---------- */
+
+.sidebar-search {
+  padding: 0 16px 8px;
+}
+.nav-search-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  transition: var(--transition-fast);
+}
+.nav-search-input::placeholder { color: var(--text-dim); }
+
+/* ---------- Collapsible category groups (v3) ---------- */
+
+.nav-category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px 4px 16px;
+}
+.nav-category-label {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--sans);
+  transition: var(--transition-fast);
+}
+.nav-category-label:hover { color: var(--text); }
+.nav-category-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.nav-chevron {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 10px;
+  line-height: 1;
+  transition: var(--transition-fast), transform 150ms ease-out;
+}
+.nav-chevron:hover { color: var(--text); }
+.nav-chevron.expanded { transform: rotate(90deg); }
+
+.nav-group-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: var(--transition-group-collapse);
+}
+.nav-group-body.expanded {
+  grid-template-rows: 1fr;
+  transition: var(--transition-group-expand);
+}
+.nav-group-body > div { overflow: hidden; }
+
+/* ---------- Search results list (v3) ---------- */
+
+.nav-results { padding: 4px 0; }
+.nav-result-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px 16px;
+  font-family: var(--sans);
+  transition: var(--transition-fast);
+}
+.nav-result-item:hover, .nav-result-item.highlighted { background: rgba(255, 255, 255, 0.04); }
+.nav-result-name { font-size: var(--text-md); font-weight: 500; }
+.nav-result-name mark { background: none; color: var(--accent); font-weight: 700; }
+.nav-result-section { font-size: var(--text-xs); color: var(--text-dim); margin-top: 2px; }
+.nav-result-excerpt { font-size: var(--text-xs); color: var(--text-dim); margin-top: 2px; }
+.nav-results-empty { padding: 12px 16px; font-size: var(--text-sm); color: var(--text-dim); }
+.nav-results-empty a { color: var(--info); cursor: pointer; text-decoration: none; }
+.nav-results-empty a:hover { text-decoration: underline; }
 
 /* ---------- Main ---------- */
 
@@ -132,10 +265,32 @@ html, body {
 }
 
 .topbar h1 {
-  font-size: 16px;
+  font-size: var(--text-lg);
   margin: 0;
   font-weight: 600;
 }
+
+.breadcrumb {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.breadcrumb-section {
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.breadcrumb-section.link { color: var(--text-dim); }
+.breadcrumb-section.link:hover { color: var(--accent); }
+.breadcrumb-sep { color: var(--text-dim); font-weight: 400; }
+.breadcrumb-tool { color: var(--text); }
 
 .menu-toggle {
   display: none;
@@ -150,6 +305,116 @@ html, body {
 .content {
   padding: 24px;
   max-width: 980px;
+}
+
+/* Content swap motion (v3, motion moment #1): 140ms opacity+translateY fade
+   on every tool<->tool and tool<->landing swap. */
+.content-enter {
+  animation: content-fade-in 140ms ease-out;
+}
+@keyframes content-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .content-enter { animation: content-fade-in-reduced 140ms ease-out; }
+  @keyframes content-fade-in-reduced {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* ---------- Section landing pages (v3) ---------- */
+
+.section-landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.section-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0;
+}
+.section-title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 4px 0 0;
+}
+.section-intro {
+  font-size: var(--text-md);
+  color: var(--text-dim);
+  max-width: 640px;
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+}
+@media (max-width: 980px) {
+  .card-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .card-grid { grid-template-columns: 1fr; }
+}
+.landing-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--sans);
+  transition: var(--transition-fast);
+}
+.landing-card:hover { border-color: var(--accent-dim); }
+.landing-card-title {
+  font-size: var(--text-md);
+  font-weight: 500;
+  margin: 0 0 6px;
+}
+.landing-card-desc {
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ---------- Home / welcome view (v3) — --text-2xl used exactly once ---------- */
+
+.home-title {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+}
+
+/* ---------- Tool description block: what it does / when to use it (v3) ---------- */
+
+.tool-copy {
+  margin-bottom: var(--space-4);
+}
+.tool-copy-line {
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  margin: 0 0 4px;
+  line-height: 1.5;
+}
+.tool-copy-line strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* tabular-nums for every mono field showing numbers/hashes/timestamps */
+.tabular-nums, textarea.output, .output-box, .result-line .val {
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Shared tool UI components ---------- */
@@ -218,6 +483,16 @@ textarea:focus, input:focus, select:focus {
   border-color: var(--accent-dim);
 }
 
+/* Accessibility floor (v3): every interactive element gets an explicit,
+   consistent --accent focus ring — not just form inputs. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.nav-item:focus-visible {
+  outline-offset: -2px;
+}
+
 textarea.output, .output-box {
   background: var(--bg-input);
   color: var(--accent);
@@ -232,6 +507,7 @@ button.btn {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  transition: var(--transition-fast);
 }
 button.btn:hover { background: var(--accent); }
 button.btn.secondary {
@@ -285,6 +561,59 @@ table.data-table th, table.data-table td {
   border-bottom: 1px solid var(--border);
 }
 table.data-table th { color: var(--text-dim); font-weight: 600; }
+table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
+
+/* ---------- Static reference lists (Pentest & CTF, ports reference) ---------- */
+
+.ref-search {
+  margin-bottom: 12px;
+}
+.ref-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ref-item {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.ref-item-title {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+.ref-item-code {
+  display: block;
+  background: var(--bg-input);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ref-item-note {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.ref-item-tag {
+  display: inline-block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--info);
+  background: rgba(88, 166, 255, 0.12);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  padding: 2px 6px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+}
 
 /* ---------- Recipe builder ---------- */
 

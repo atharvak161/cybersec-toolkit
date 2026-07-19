@@ -1,7 +1,9 @@
 import { readExif, stripExif } from '../lib/exif.js';
 import { identifyFileType } from '../lib/magic-bytes.js';
 import { lsbEncode, lsbDecode, lsbCapacityBytes } from '../lib/steganography.js';
+import { parseBase64Image } from '../lib/base64-image.js';
 import { el, toolHeader, clear, resultLine, showError, educationalBadge } from './helpers.js';
+import { TOOL_COPY } from '../data/tool-copy.js';
 
 function dropZone(label, onFile) {
   const zone = el('div', {
@@ -27,7 +29,7 @@ export const FILES_TOOLS = [
     name: 'EXIF Viewer / Stripper',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('Read EXIF metadata from a JPEG (camera make/model, timestamps, GPS if present), or strip all metadata and download a cleaned copy. Everything happens locally.'));
+      container.appendChild(toolHeader(TOOL_COPY.exif));
 
       const resultsBox = el('div', {});
       const downloadArea = el('div', {});
@@ -67,7 +69,7 @@ export const FILES_TOOLS = [
     name: 'File Type Identifier (Magic Bytes)',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('Identifies a file’s true type from its leading bytes, regardless of its extension.'));
+      container.appendChild(toolHeader(TOOL_COPY['magic-bytes']));
 
       const resultsBox = el('div', {});
       const { zone, fileInput } = dropZone('Click or drag any file here', async (file) => {
@@ -93,7 +95,7 @@ export const FILES_TOOLS = [
     render(container) {
       clear(container);
       container.appendChild(educationalBadge('Educational — least-significant-bit steganography on PNG images.'));
-      container.appendChild(toolHeader('Hide a text message in an image’s pixel data (LSB of R/G/B channels), or extract a previously hidden message. Use PNG (lossless) — JPEG compression will destroy the hidden bits.'));
+      container.appendChild(toolHeader(TOOL_COPY.steganography));
 
       let canvas = document.createElement('canvas');
       let ctx = canvas.getContext('2d');
@@ -165,6 +167,50 @@ export const FILES_TOOLS = [
         el('div', { class: 'field-row', style: 'margin-top:10px' }, [encodeBtn, decodeBtn]),
         errorNode, outputArea
       ]));
+    }
+  },
+  {
+    id: 'base64-image',
+    name: 'Base64 Image Previewer',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY['base64-image']));
+
+      const input = el('textarea', { rows: '6', placeholder: 'data:image/png;base64,iVBORw0KGgo… or a raw base64 blob' });
+      const runBtn = el('button', { class: 'btn' }, 'Preview');
+      const errorNode = el('div', {});
+      const resultsBox = el('div', {});
+
+      runBtn.addEventListener('click', () => {
+        clear(errorNode);
+        clear(resultsBox);
+        try {
+          const { bytes, declaredMime, detected, sizeBytes, looksLikeImage } = parseBase64Image(input.value);
+          const infoCard = el('div', { class: 'card' });
+          infoCard.appendChild(resultLine('Size', sizeBytes.toLocaleString() + ' bytes'));
+          infoCard.appendChild(resultLine('Declared MIME (from data URI, if present)', declaredMime || '(none — raw base64)'));
+          infoCard.appendChild(resultLine('Detected type (magic bytes)', detected ? `${detected.type} (${detected.mime})` : 'Unrecognized'));
+          resultsBox.appendChild(infoCard);
+
+          if (looksLikeImage) {
+            const mime = detected.mime;
+            const blob = new Blob([bytes], { type: mime });
+            const url = URL.createObjectURL(blob);
+            resultsBox.appendChild(el('img', { src: url, style: 'max-width:100%; border:1px solid var(--border); border-radius:var(--radius); margin-top:10px;' }));
+          } else {
+            resultsBox.appendChild(el('p', { class: 'error-box' }, 'Decoded bytes do not match a known image signature — nothing rendered.'));
+          }
+        } catch (err) {
+          showError(errorNode, err);
+        }
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [
+        el('label', {}, 'Base64 / data URI'), input,
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn]),
+        errorNode
+      ]));
+      container.appendChild(resultsBox);
     }
   }
 ];

@@ -1,8 +1,9 @@
 import { calculateIpv4Subnet, calculateIpv6Subnet } from '../lib/cidr.js';
-import { testRegex, COMMON_PATTERNS } from '../lib/regex-patterns.js';
-import { analyzeUrl } from '../lib/phishing.js';
 import { lookupDns, lookupWhois, lookupIpGeo } from '../lib/net-lookups.js';
+import { analyzeHeaders } from '../lib/http-headers.js';
+import { searchPorts } from '../lib/ports-reference.js';
 import { el, toolHeader, clear, resultLine, showError, externalApiBadge } from './helpers.js';
+import { TOOL_COPY } from '../data/tool-copy.js';
 
 export const NETWORK_TOOLS = [
   {
@@ -10,7 +11,7 @@ export const NETWORK_TOOLS = [
     name: 'CIDR / Subnet Calculator',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('Enter an IPv4 or IPv6 CIDR (e.g. 192.168.1.0/24 or 2001:db8::/32).'));
+      container.appendChild(toolHeader(TOOL_COPY.cidr));
 
       const input = el('input', { type: 'text', placeholder: '192.168.1.10/24', value: '192.168.1.10/24' });
       const runBtn = el('button', { class: 'btn' }, 'Calculate');
@@ -53,100 +54,12 @@ export const NETWORK_TOOLS = [
     }
   },
   {
-    id: 'regex-tester',
-    name: 'Regex Tester',
-    render(container) {
-      clear(container);
-      container.appendChild(toolHeader('Test a regular expression against sample text, or pick from a small library of common patterns.'));
-
-      const presetSelect = el('select', {}, [
-        el('option', { value: '' }, '— pick a common pattern —'),
-        ...COMMON_PATTERNS.map((p) => el('option', { value: p.name }, p.name))
-      ]);
-      const patternInput = el('input', { type: 'text', placeholder: 'Regex pattern (without slashes)' });
-      const flagsInput = el('input', { type: 'text', placeholder: 'Flags e.g. gi', value: 'g' });
-      const textInput = el('textarea', { rows: '5', placeholder: 'Text to search…' });
-      const runBtn = el('button', { class: 'btn' }, 'Test');
-      const resultsBox = el('div', {});
-      const errorNode = el('div', {});
-
-      presetSelect.addEventListener('change', () => {
-        const preset = COMMON_PATTERNS.find((p) => p.name === presetSelect.value);
-        if (preset) {
-          patternInput.value = preset.pattern;
-          flagsInput.value = preset.flags + 'g';
-        }
-      });
-
-      runBtn.addEventListener('click', () => {
-        clear(errorNode);
-        clear(resultsBox);
-        try {
-          const matches = testRegex(patternInput.value, flagsInput.value, textInput.value);
-          resultsBox.appendChild(el('p', { class: 'tool-desc' }, `${matches.length} match${matches.length === 1 ? '' : 'es'}`));
-          const table = el('table', { class: 'data-table' }, [
-            el('tr', {}, [el('th', {}, '#'), el('th', {}, 'Match'), el('th', {}, 'Index'), el('th', {}, 'Groups')]),
-            ...matches.map((m, i) => el('tr', {}, [
-              el('td', {}, String(i + 1)), el('td', {}, m.match), el('td', {}, String(m.index)),
-              el('td', {}, m.groups.filter((g) => g !== undefined).join(', ') || '—')
-            ]))
-          ]);
-          resultsBox.appendChild(table);
-        } catch (err) {
-          showError(errorNode, err);
-        }
-      });
-
-      container.appendChild(el('div', { class: 'card' }, [
-        el('div', { class: 'field-row' }, [el('label', {}, 'Preset'), presetSelect]),
-        el('div', { class: 'field-row' }, [
-          el('div', { style: 'flex:1' }, [el('label', {}, 'Pattern'), patternInput]),
-          el('div', { style: 'width:120px' }, [el('label', {}, 'Flags'), flagsInput])
-        ]),
-        el('label', { style: 'margin-top:10px' }, 'Text'), textInput,
-        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn]),
-        errorNode
-      ]));
-      container.appendChild(resultsBox);
-    }
-  },
-  {
-    id: 'phishing-checker',
-    name: 'Phishing URL Heuristic Checker',
-    render(container) {
-      clear(container);
-      container.appendChild(toolHeader('Pure client-side pattern analysis — NOT a live blocklist lookup. Flags IP-literal hosts, excessive subdomains, punycode/homograph indicators, and lookalike domains against common brands.'));
-
-      const input = el('input', { type: 'text', placeholder: 'https://example.com/path' });
-      const runBtn = el('button', { class: 'btn' }, 'Analyze');
-      const resultsBox = el('div', {});
-
-      runBtn.addEventListener('click', () => {
-        clear(resultsBox);
-        const result = analyzeUrl(input.value);
-        const card = el('div', { class: 'card' });
-        const riskColor = { minimal: 'var(--accent)', low: 'var(--info)', medium: 'var(--warning)', high: 'var(--danger)' }[result.risk] || 'var(--text)';
-        card.appendChild(el('p', { style: `color:${riskColor}; font-weight:700; font-size:16px` }, `Risk: ${result.risk.toUpperCase()} (score ${result.score}/100)`));
-        const list = el('ul', {});
-        for (const r of result.reasons) list.appendChild(el('li', {}, r));
-        card.appendChild(list);
-        resultsBox.appendChild(card);
-      });
-
-      container.appendChild(el('div', { class: 'card' }, [
-        el('label', {}, 'URL'), input,
-        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn])
-      ]));
-      container.appendChild(resultsBox);
-    }
-  },
-  {
     id: 'dns-lookup',
     name: 'DNS Lookup',
     render(container) {
       clear(container);
       container.appendChild(externalApiBadge('Calls dns.google (Google Public DNS-over-HTTPS JSON API, no key required).'));
-      container.appendChild(toolHeader('Look up DNS records for a domain via a public resolver — not a scan, just a standard DNS query.'));
+      container.appendChild(toolHeader(TOOL_COPY['dns-lookup']));
 
       const domain = el('input', { type: 'text', placeholder: 'example.com' });
       const type = el('select', {}, ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'SOA'].map((t) => el('option', { value: t }, t)));
@@ -186,7 +99,7 @@ export const NETWORK_TOOLS = [
     render(container) {
       clear(container);
       container.appendChild(externalApiBadge('Calls rdap.org (IETF/IANA-standardized WHOIS successor, no key required).'));
-      container.appendChild(toolHeader('Look up domain registration info via RDAP — a read-only public registry query, not active scanning.'));
+      container.appendChild(toolHeader(TOOL_COPY['whois-lookup']));
 
       const domain = el('input', { type: 'text', placeholder: 'example.com' });
       const runBtn = el('button', { class: 'btn' }, 'Lookup');
@@ -224,7 +137,7 @@ export const NETWORK_TOOLS = [
     render(container) {
       clear(container);
       container.appendChild(externalApiBadge('Calls ipapi.co (no key required for basic lookups).'));
-      container.appendChild(toolHeader('Approximate geolocation for a public IP address, via a public read-only API.'));
+      container.appendChild(toolHeader(TOOL_COPY['ip-geo']));
 
       const ip = el('input', { type: 'text', placeholder: '8.8.8.8' });
       const runBtn = el('button', { class: 'btn' }, 'Lookup');
@@ -255,6 +168,114 @@ export const NETWORK_TOOLS = [
         el('div', { class: 'field-row' }, [el('label', {}, 'IP address'), ip, runBtn]),
         errorNode
       ]));
+      container.appendChild(resultsBox);
+    }
+  },
+  {
+    id: 'http-headers',
+    name: 'HTTP Security Headers Checker',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY['http-headers']));
+      container.appendChild(el('p', { class: 'tool-copy-line' }, [
+        el('strong', {}, 'How to get headers: '),
+        "In Chrome/Firefox devtools, open the Network tab, reload the page, click the document request, and copy the Response Headers (Firefox: right-click a header → \"Copy Headers\"; Chrome: view source under Headers). Paste the raw block below — one \"Name: value\" pair per line."
+      ]));
+      container.appendChild(el('p', { class: 'tool-copy-line' }, [
+        el('strong', {}, 'Why not just fetch the URL directly? '),
+        "This toolkit is 100% client-side with no backend proxy, so a direct fetch() from your browser is subject to the target site's CORS policy — most sites will block it, and that's expected, not a bug. Pasting headers you already have (from devtools, or from curl -I) sidesteps CORS entirely."
+      ]));
+
+      const input = el('textarea', { rows: '10', placeholder: 'HTTP/1.1 200 OK\nContent-Type: text/html\nStrict-Transport-Security: max-age=63072000\n…' });
+      const runBtn = el('button', { class: 'btn' }, 'Analyze headers');
+      const resultsBox = el('div', {});
+      const errorNode = el('div', {});
+
+      runBtn.addEventListener('click', () => {
+        clear(resultsBox);
+        clear(errorNode);
+        try {
+          const { present, missing, infoLeaks } = analyzeHeaders(input.value);
+
+          const summary = el('div', { class: 'card' });
+          summary.appendChild(el('p', { style: `color:${missing.length ? 'var(--warning)' : 'var(--accent)'}; font-weight:600` },
+            missing.length ? `${missing.length} security header${missing.length === 1 ? '' : 's'} missing.` : 'All checked security headers are present.'
+          ));
+          resultsBox.appendChild(summary);
+
+          if (missing.length) {
+            const missingCard = el('div', { class: 'card' });
+            missingCard.appendChild(el('h3', {}, 'Missing'));
+            for (const h of missing) {
+              missingCard.appendChild(el('div', { class: 'ref-item' }, [
+                el('p', { class: 'ref-item-title' }, h.label),
+                el('p', { class: 'ref-item-note' }, h.why)
+              ]));
+            }
+            resultsBox.appendChild(missingCard);
+          }
+
+          if (present.length) {
+            const presentCard = el('div', { class: 'card' });
+            presentCard.appendChild(el('h3', {}, 'Present'));
+            for (const h of present) presentCard.appendChild(resultLine(h.label, h.value));
+            resultsBox.appendChild(presentCard);
+          }
+
+          if (infoLeaks.length) {
+            const leakCard = el('div', { class: 'card' });
+            leakCard.appendChild(el('h3', {}, 'Minor information disclosure'));
+            for (const h of infoLeaks) {
+              leakCard.appendChild(el('div', { class: 'ref-item' }, [
+                el('p', { class: 'ref-item-title' }, `${h.label}: ${h.value}`),
+                el('p', { class: 'ref-item-note' }, h.note)
+              ]));
+            }
+            resultsBox.appendChild(leakCard);
+          }
+        } catch (err) {
+          showError(errorNode, err);
+        }
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [
+        el('label', {}, 'Pasted response headers'), input,
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn]),
+        errorNode
+      ]));
+      container.appendChild(resultsBox);
+    }
+  },
+  {
+    id: 'ports-reference',
+    name: 'Well-Known Ports Reference',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY['ports-reference']));
+
+      const searchInput = el('input', { type: 'text', class: 'ref-search', placeholder: 'Search by port, protocol, or service name…' });
+      const resultsBox = el('div', {});
+
+      function renderResults(query) {
+        clear(resultsBox);
+        const results = searchPorts(query);
+        if (results.length === 0) {
+          resultsBox.appendChild(el('p', { class: 'tool-desc' }, `No ports match "${query}".`));
+          return;
+        }
+        const table = el('table', { class: 'data-table' }, [
+          el('tr', {}, [el('th', {}, 'Port'), el('th', {}, 'Proto'), el('th', {}, 'Service'), el('th', {}, 'Description')]),
+          ...results.map((p) => el('tr', {}, [
+            el('td', { class: 'tabular-nums' }, String(p.port)), el('td', {}, p.proto), el('td', {}, p.name), el('td', {}, p.desc)
+          ]))
+        ]);
+        resultsBox.appendChild(table);
+      }
+
+      searchInput.addEventListener('input', () => renderResults(searchInput.value));
+
+      container.appendChild(el('div', { class: 'card' }, [searchInput]));
+      renderResults('');
       container.appendChild(resultsBox);
     }
   }

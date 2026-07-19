@@ -1,6 +1,8 @@
 import * as enc from '../lib/encoding.js';
 import * as encExtra from '../lib/encoding-extra.js';
+import { morseEncode, morseDecode } from '../lib/morse.js';
 import { el, ioPanel, showError, copyButton, toolHeader, clear } from './helpers.js';
+import { TOOL_COPY } from '../data/tool-copy.js';
 
 function codecTool(id, name, description, encodeFn, decodeFn) {
   return {
@@ -48,6 +50,7 @@ export const ENCODING_TOOLS = [
   codecTool('url', 'URL Encode/Decode', 'Percent-encoding for URLs.', enc.urlEncode, enc.urlDecode),
   codecTool('binary', 'Binary', 'Text as space-separated 8-bit binary groups.', enc.binaryEncode, enc.binaryDecode),
   codecTool('uuencode', 'UUEncode', 'Classic Unix-to-Unix encoding.', (s) => encExtra.uuEncode(s), (s) => encExtra.uuDecode(s)),
+  codecTool('morse', 'Morse Code', TOOL_COPY.morse, (s) => morseEncode(s), (s) => morseDecode(s)),
   {
     id: 'rot13-caesar',
     name: 'ROT13 / Caesar Cipher',

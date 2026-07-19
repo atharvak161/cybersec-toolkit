@@ -1,7 +1,28 @@
 import { decodeJwt, verifyHmacJwt } from '../lib/jwt.js';
-import { aesEncrypt, aesDecrypt } from '../lib/aes.js';
+import { aesEncrypt, aesDecrypt, aesEncryptBytes, aesDecryptBytes } from '../lib/aes.js';
 import { generateRsaKeypair, rsaEncrypt, rsaDecrypt } from '../lib/rsa.js';
+import { parseCertificatePem } from '../lib/x509.js';
+import { generateTotp } from '../lib/totp.js';
 import { el, toolHeader, clear, showError, copyButton, resultLine } from './helpers.js';
+import { TOOL_COPY } from '../data/tool-copy.js';
+
+function dropZone(label, onFile) {
+  const zone = el('div', {
+    class: 'card',
+    style: 'border:2px dashed var(--border); text-align:center; padding:32px; cursor:pointer;'
+  }, label);
+  const fileInput = el('input', { type: 'file', style: 'display:none' });
+  zone.addEventListener('click', () => fileInput.click());
+  zone.addEventListener('dragover', (e) => e.preventDefault());
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) onFile(fileInput.files[0]);
+  });
+  return { zone, fileInput };
+}
 
 export const CRYPTO_TOOLS = [
   {
@@ -9,7 +30,7 @@ export const CRYPTO_TOOLS = [
     name: 'JWT Decoder / Inspector',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('Decode a JWT’s header and payload locally. Flags alg:none and reports expiry status. Optional: verify an HS256/384/512 signature if you supply the secret (never required, never sent anywhere).'));
+      container.appendChild(toolHeader(TOOL_COPY['jwt-decoder']));
 
       const input = el('textarea', { rows: '4', placeholder: 'Paste a JWT (header.payload.signature)…' });
       const decodeBtn = el('button', { class: 'btn' }, 'Decode');
@@ -71,7 +92,7 @@ export const CRYPTO_TOOLS = [
     name: 'AES-GCM Encrypt/Decrypt',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('AES-256-GCM via the native Web Crypto API. Key is derived from your passphrase with PBKDF2 (100,000 iterations). A random salt+IV is generated per encryption and packed with the ciphertext.'));
+      container.appendChild(toolHeader(TOOL_COPY.aes));
 
       const passphrase = el('input', { type: 'password', placeholder: 'Passphrase' });
 
@@ -120,7 +141,7 @@ export const CRYPTO_TOOLS = [
     name: 'RSA Keypair + Encrypt/Decrypt',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('RSA-OAEP (SHA-256) via the native Web Crypto API. Generate a keypair, then encrypt with the public key and decrypt with the private key. Message size is limited by RSA-OAEP (short messages only — for larger data, use AES and encrypt the AES key with RSA).'));
+      container.appendChild(toolHeader(TOOL_COPY.rsa));
 
       const modulusSelect = el('select', {}, ['2048', '4096'].map((v) => el('option', { value: v }, v + ' bits')));
       const generateBtn = el('button', { class: 'btn' }, 'Generate keypair');
@@ -180,6 +201,167 @@ export const CRYPTO_TOOLS = [
         ])
       ]));
       container.appendChild(opError);
+    }
+  },
+  {
+    id: 'file-aes',
+    name: 'File Encryption/Decryption',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY['file-aes']));
+
+      const passphrase = el('input', { type: 'password', placeholder: 'Passphrase' });
+      const statusNode = el('div', {});
+      const errorNode = el('div', {});
+      const downloadArea = el('div', { style: 'margin-top:10px' });
+      let loadedFile = null;
+
+      const { zone, fileInput } = dropZone('Click or drag any file here (to encrypt, or a .enc file to decrypt)', (file) => {
+        loadedFile = file;
+        clear(statusNode);
+        clear(downloadArea);
+        statusNode.appendChild(el('p', { class: 'tool-desc' }, `Loaded "${file.name}" (${file.size.toLocaleString()} bytes).`));
+      });
+
+      const encryptBtn = el('button', { class: 'btn' }, 'Encrypt file →');
+      const decryptBtn = el('button', { class: 'btn secondary' }, '← Decrypt file');
+
+      encryptBtn.addEventListener('click', async () => {
+        clear(errorNode);
+        clear(downloadArea);
+        if (!loadedFile) return showError(errorNode, new Error('Load a file first'));
+        if (!passphrase.value) return showError(errorNode, new Error('Enter a passphrase'));
+        try {
+          const bytes = new Uint8Array(await loadedFile.arrayBuffer());
+          const packed = await aesEncryptBytes(bytes, passphrase.value);
+          const blob = new Blob([packed], { type: 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          downloadArea.appendChild(el('a', { href: url, download: loadedFile.name + '.enc', class: 'btn' }, `Download ${loadedFile.name}.enc`));
+        } catch (err) {
+          showError(errorNode, err);
+        }
+      });
+
+      decryptBtn.addEventListener('click', async () => {
+        clear(errorNode);
+        clear(downloadArea);
+        if (!loadedFile) return showError(errorNode, new Error('Load an encrypted file first'));
+        if (!passphrase.value) return showError(errorNode, new Error('Enter the passphrase'));
+        try {
+          const packed = new Uint8Array(await loadedFile.arrayBuffer());
+          const plainBytes = await aesDecryptBytes(packed, passphrase.value);
+          const blob = new Blob([plainBytes], { type: 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          const outName = loadedFile.name.endsWith('.enc') ? loadedFile.name.slice(0, -4) : 'decrypted-' + loadedFile.name;
+          downloadArea.appendChild(el('a', { href: url, download: outName, class: 'btn' }, `Download ${outName}`));
+        } catch (err) {
+          showError(errorNode, new Error('Decryption failed — wrong passphrase, or file is not a valid encrypted blob from this tool.'));
+        }
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [el('label', {}, 'Passphrase'), passphrase]));
+      container.appendChild(zone);
+      container.appendChild(fileInput);
+      container.appendChild(statusNode);
+      container.appendChild(el('div', { class: 'field-row', style: 'margin-top:10px' }, [encryptBtn, decryptBtn]));
+      container.appendChild(errorNode);
+      container.appendChild(downloadArea);
+    }
+  },
+  {
+    id: 'totp',
+    name: 'TOTP / 2FA Code Generator',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY.totp));
+
+      const secretInput = el('input', { type: 'text', placeholder: 'Base32 secret, e.g. JBSWY3DPEHPK3PXP' });
+      const algoSelect = el('select', {}, ['SHA-1', 'SHA-256', 'SHA-512'].map((a) => el('option', { value: a }, a)));
+      const digitsSelect = el('select', {}, ['6', '8'].map((d) => el('option', { value: d }, d + ' digits')));
+      const periodInput = el('input', { type: 'number', value: '30', style: 'width:80px' });
+      const startBtn = el('button', { class: 'btn' }, 'Generate live code');
+      const codeDisplay = el('div', { style: 'font-family:var(--mono); font-size:34px; letter-spacing:0.08em; margin:12px 0; color:var(--accent)', class: 'tabular-nums' }, '——— ———');
+      const countdownDisplay = el('div', { class: 'tool-desc' }, '');
+      const errorNode = el('div', {});
+      let intervalHandle = null;
+
+      async function tick() {
+        clear(errorNode);
+        try {
+          const { code, secondsRemaining, period } = await generateTotp(secretInput.value, {
+            algorithm: algoSelect.value,
+            digits: Number(digitsSelect.value),
+            period: Number(periodInput.value) || 30
+          });
+          codeDisplay.textContent = code.slice(0, code.length / 2) + ' ' + code.slice(code.length / 2);
+          countdownDisplay.textContent = `Refreshes in ${secondsRemaining}s (period: ${period}s)`;
+        } catch (err) {
+          showError(errorNode, err);
+          clearInterval(intervalHandle);
+          intervalHandle = null;
+        }
+      }
+
+      startBtn.addEventListener('click', () => {
+        if (intervalHandle) clearInterval(intervalHandle);
+        tick();
+        intervalHandle = setInterval(tick, 1000);
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [
+        el('label', {}, 'Base32 secret'), secretInput,
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [
+          el('div', {}, [el('label', {}, 'Algorithm'), algoSelect]),
+          el('div', {}, [el('label', {}, 'Digits'), digitsSelect]),
+          el('div', {}, [el('label', {}, 'Period (s)'), periodInput])
+        ]),
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [startBtn]),
+        errorNode,
+        codeDisplay,
+        countdownDisplay
+      ]));
+    }
+  },
+  {
+    id: 'x509',
+    name: 'X.509 Certificate Decoder',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY.x509));
+
+      const input = el('textarea', { rows: '10', placeholder: '-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----' });
+      const runBtn = el('button', { class: 'btn' }, 'Parse certificate');
+      const resultsBox = el('div', {});
+      const errorNode = el('div', {});
+
+      runBtn.addEventListener('click', () => {
+        clear(resultsBox);
+        clear(errorNode);
+        try {
+          const cert = parseCertificatePem(input.value);
+          const card = el('div', { class: 'card' });
+          card.appendChild(resultLine('Subject', cert.subjectString));
+          card.appendChild(resultLine('Issuer', cert.issuerString));
+          card.appendChild(resultLine('Serial number', cert.serialNumber));
+          card.appendChild(resultLine('Signature algorithm', cert.signatureAlgorithm));
+          card.appendChild(resultLine('Valid from', cert.notBefore));
+          card.appendChild(resultLine('Valid until', cert.notAfter));
+          card.appendChild(resultLine('Expired?', cert.isExpired ? 'YES' : 'No'));
+          if (cert.subjectAltNames.length) {
+            card.appendChild(resultLine('SANs', cert.subjectAltNames.map((s) => `${s.type}:${s.value}`).join(', ')));
+          }
+          resultsBox.appendChild(card);
+        } catch (err) {
+          showError(errorNode, err);
+        }
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [
+        el('label', {}, 'Certificate (PEM)'), input,
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn]),
+        errorNode
+      ]));
+      container.appendChild(resultsBox);
     }
   }
 ];
