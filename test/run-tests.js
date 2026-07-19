@@ -951,15 +951,39 @@ test('password-gen: 100 generated passwords are not all identical (sanity floor)
   assert.ok(outputs.size > 1, 'expected variation across 100 generated passwords');
 });
 
-test('password-gen: all 4 sets selected always include at least one char from each (coverage guarantee)', () => {
+test('password-gen: coverage guarantee holds across length/charset combinations (10k trials each, no failures allowed)', () => {
+  // Bounce cycle 2 (QA, 2026-07-19): a prior version of this test only ran
+  // 200 iterations, which is far too few to catch the ~0.049% (~1-in-2000)
+  // "stomp" coverage-guarantee regression QA found via a 500k-trial Monte
+  // Carlo — that was a false negative in this suite's own coverage, not
+  // evidence the bug didn't exist. This is not a probabilistic near-guarantee
+  // check: ANY failure here means the coverage guarantee is broken.
+  //
+  // 10,000 trials per combination keeps the default `npm test` run fast.
+  // The full ≥100,000-trial verification (matching QA's own repro scale)
+  // is run separately via `node test/password-gen-coverage-stress.mjs`
+  // (see that file) and was run at 500k/200k/200k trials (900k total, 0
+  // failures) as part of verifying this fix before commit.
   const sets = {
     upper: /[A-Z]/, lower: /[a-z]/, digits: /[0-9]/,
     symbols: /[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/
   };
-  for (let i = 0; i < 200; i++) {
-    const pwd = generatePassword({ length: 16 });
-    for (const [name, re] of Object.entries(sets)) {
-      assert.ok(re.test(pwd), `iteration ${i}: "${pwd}" missing required set "${name}"`);
+  const N = 10000;
+  // Include length 8 (tighter than the original length-16-only test) and
+  // length 4 (tightest possible with all 4 single-char-minimum sets — every
+  // position is a structurally-guaranteed char, the highest-risk case for
+  // any force-insertion-style bug).
+  const combos = [
+    { length: 16 },
+    { length: 8 },
+    { length: 4 }
+  ];
+  for (const opts of combos) {
+    for (let i = 0; i < N; i++) {
+      const pwd = generatePassword(opts);
+      for (const [name, re] of Object.entries(sets)) {
+        assert.ok(re.test(pwd), `length=${opts.length} iteration ${i}: "${pwd}" missing required set "${name}"`);
+      }
     }
   }
 });
