@@ -32,6 +32,20 @@ It is **not** intended for, and must not be used for:
   client-side heuristics — none of them perform active scanning or
   enumeration of a target system.
 
+The three v3 **Pentest & CTF Reference** tools — Reverse Shell Generator,
+Injection Payload Cheatsheet, and Privilege Escalation Enumeration
+Checklist — extend the same rule: they are **reference and generator
+tools only**, intended strictly for **authorized penetration testing
+engagements and CTF/lab contexts**. Same category of tool as revshells.com,
+PayloadsAllTheThings, or GTFOBins — not a substitute for having explicit
+permission to test the target you're pointing them at. None of the three
+makes a network call or executes anything: the Reverse Shell Generator
+only prints a payload/listener command pair as text (it never opens a
+connection or spawns a process), and the Injection Cheatsheet and
+Privilege Escalation Checklist are static, client-side reference data —
+you still have to run every command yourself, on a system you're
+authorized to be on.
+
 If you're unsure whether a use case is appropriate, don't do it.
 
 ## What's client-side vs. external
@@ -55,6 +69,16 @@ compiled or logged by this toolkit itself.
 
 - No build step. `index.html` loads `js/app.js` as an ES module; everything
   else is plain ES modules imported from there.
+- **v3 navigation (9 sections):** the sidebar is a pinned Recipe Builder
+  entry point plus 8 collapsible category groups — Encoding & Ciphers,
+  Hashing & Integrity, Cryptography, Passwords & Credential Safety, Files
+  & Metadata, Network & Recon, Developer Utilities, and Pentest & CTF
+  Reference (9 sections total, 48 tools). Each category has its own
+  section landing page (an intro blurb plus a card grid of its tools),
+  collapsible/expandable group state persisted to `localStorage`, and a
+  quick-search box (press `/`) that filters across all tools by name. The
+  URL hash is the single source of truth for navigation, so direct links,
+  and browser back/forward, both work correctly.
 - All pure logic (encode/decode/hash/crypto/parsing functions) lives in
   `js/lib/*.js`, independent of the DOM, so it can be — and is — unit
   tested directly with Node (see `test/run-tests.js`).
@@ -160,6 +184,24 @@ scanner the way a production QR library is.
 | Epoch/timestamp converter | Working |
 | IP geolocation lookup (ipapi.co, external API, disclosed) | Working |
 | Text diff tool | Working |
+
+### v3 (additive, same app — 13 new tools, plus the 9-section nav reorg above)
+
+| Tool | Status |
+|---|---|
+| Morse Code encode/decode | Working |
+| TOTP / 2FA Code Generator (RFC 6238, from a shared secret) | Working |
+| Password Generator (configurable length/character set, cryptographically random) | Working |
+| Diceware Passphrase Generator (wordlist-based, cryptographically random) | Working |
+| File Encryption/Decryption (AES-GCM, whole file, password-derived key via Web Crypto) | Working |
+| HTTP Security Headers Checker (paste headers from devtools; flags missing/weak CSP, HSTS, X-Frame-Options, etc.) | Working (paste-based by design — avoids a CORS-blocked live fetch) |
+| Homoglyph / Lookalike Detector (flags visually-confusable characters, e.g. Cyrillic vs. Latin) | Working |
+| JSON/XML/YAML Formatter (pretty-print, validate, reformat) | Working |
+| Base64 Image Previewer (paste a base64 string or data URI, render inline) | Working |
+| Well-Known Ports Reference (searchable port/protocol/service table) | Working |
+| Reverse Shell Generator — *Pentest & CTF Reference* (payload + matching listener, multiple shells/languages) | Working — text generation only, no network call or execution; see [Purpose & Ethical Use](#purpose--ethical-use) |
+| Injection Payload Cheatsheet — *Pentest & CTF Reference* (SQLi, XSS, LFI/RFI, command injection, SSTI patterns) | Working — static reference only |
+| Privilege Escalation Enumeration Checklist — *Pentest & CTF Reference* (Linux/Windows enumeration steps + GTFOBins/LOLBAS links) | Working — static reference only |
 
 ## Running the tests
 
