@@ -15,6 +15,12 @@ export const TOOL_COPY = {
     when: "You've got a blob that's base64-then-gzip-then-hex, or you're reverse-engineering what transform produced a string, and you need to stack operations and watch the intermediate output instead of running each tool by hand one at a time."
   },
 
+  // ---------- Auto-Decode (Magic Wand) ----------
+  'auto-decode': {
+    what: 'Takes a mystery string of unknown encoding and automatically tries every decoder in the toolkit — recursively peeling layered encodings — then ranks the plausible plaintexts by how much they look like real, meaningful data.',
+    when: "You've pasted something and have no idea what it is — base64, hex, base32, Morse, ROT13, some stack of all of them — and you want the answer without manually running fifteen tools and eyeballing each output."
+  },
+
   // ---------- Section 1: Encoding & Ciphers ----------
   hex: {
     what: 'Converts text to and from hexadecimal byte representation.',

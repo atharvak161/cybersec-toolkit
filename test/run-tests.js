@@ -48,6 +48,7 @@ import { analyzeHeaders } from '../js/lib/http-headers.js';
 import { searchPorts } from '../js/lib/ports-reference.js';
 import { generateReverseShell, SHELL_TYPES } from '../js/lib/reverse-shell.js';
 import { aesEncryptBytes, aesDecryptBytes } from '../js/lib/aes.js';
+import { autoDecode, DECODER_NAMES } from '../js/lib/auto-decode.js';
 
 // ============================================================
 // Encoding
@@ -1257,4 +1258,177 @@ test('aes: encrypt then decrypt a Uint8Array (file bytes) returns the exact orig
   const packed = await aesEncryptBytes(original, 'file-encryption-passphrase');
   const decrypted = await aesDecryptBytes(packed, 'file-encryption-passphrase');
   assert.deepEqual(Array.from(decrypted), Array.from(original));
+});
+
+// ============================================================
+// Auto-Decode (Magic Wand) — js/lib/auto-decode.js
+// Orchestration engine: layered decoding, ranking, safety caps.
+// ============================================================
+
+// Deterministic PRNG (mulberry32) so the "adversarial" tests are reproducible.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function findByOutput(result, expected) {
+  return result.candidates.find((c) => c.output === expected);
+}
+
+// ---- 1. Layered-encoding correctness -----------------------------------
+
+test('auto-decode: peels text -> base64 -> hex (top result, correct 2-step path)', () => {
+  const plain = 'the attack is at dawn and we go now';
+  const layered = enc.hexEncode(enc.base64Encode(plain));
+  const r = autoDecode(layered);
+  assert.equal(r.candidates[0].output, plain, 'plaintext should be the #1 ranked candidate');
+  assert.deepEqual(r.candidates[0].path, ['hex', 'base64']);
+});
+
+test('auto-decode: peels text -> hex -> base64 (correct 2-step path)', () => {
+  const plain = 'the attack is at dawn and we go now';
+  const layered = enc.base64Encode(enc.hexEncode(plain));
+  const r = autoDecode(layered);
+  assert.equal(r.candidates[0].output, plain);
+  assert.deepEqual(r.candidates[0].path, ['base64', 'hex']);
+});
+
+test('auto-decode: peels text -> base64 -> base32 (correct 2-step path)', () => {
+  const plain = 'the attack is at dawn and we go now';
+  const layered = enc.base32Encode(enc.base64Encode(plain));
+  const r = autoDecode(layered);
+  assert.equal(r.candidates[0].output, plain);
+  assert.deepEqual(r.candidates[0].path, ['base32', 'base64']);
+});
+
+test('auto-decode: peels a 3-layer stack base64(hex(base64(text)))', () => {
+  const plain = 'the attack is at dawn and we go now';
+  const layered = enc.base64Encode(enc.hexEncode(enc.base64Encode(plain)));
+  const r = autoDecode(layered);
+  const hit = findByOutput(r, plain);
+  assert.ok(hit, 'original plaintext must be recovered');
+  assert.deepEqual(hit.path, ['base64', 'hex', 'base64']);
+  assert.equal(r.candidates[0].output, plain, 'and it should rank #1');
+});
+
+// ---- 2. Single-layer correctness ---------------------------------------
+
+test('auto-decode: single-layer decoders each rank the plaintext #1', () => {
+  const plain = 'the attack is at dawn and we go now';
+  const cases = [
+    ['base64', enc.base64Encode(plain)],
+    ['hex', enc.hexEncode(plain)],
+    ['base32', enc.base32Encode(plain)],
+    ['base58', enc.base58Encode(plain)],
+    ['base85', encExtra.base85Encode(plain)],
+    ['base91', encExtra.base91Encode(plain)],
+    ['binary', enc.binaryEncode(plain)],
+    ['uudecode', encExtra.uuEncode(plain)],
+    ['rot13', enc.rot13(plain)],
+    ['url', 'the%20attack%20is%20at%20dawn%20and%20we%20go%20now']
+  ];
+  for (const [name, encoded] of cases) {
+    const r = autoDecode(encoded);
+    assert.equal(r.candidates[0].output, plain, `${name}: plaintext should rank #1`);
+    assert.deepEqual(r.candidates[0].path, [name], `${name}: path should be single-step`);
+    assert.ok(r.candidates[0].score >= 0.5, `${name}: score should be high-confidence`);
+  }
+});
+
+test('auto-decode: Morse single layer decodes and ranks #1 (case-insensitive)', () => {
+  const morse = morseEncode('hello world'); // decoder returns uppercase per ITU table
+  const r = autoDecode(morse);
+  assert.equal(r.candidates[0].output.toLowerCase(), 'hello world');
+  assert.deepEqual(r.candidates[0].path, ['morse']);
+});
+
+// ---- 3. Adversarial / safety: timing + enforced attempt cap ------------
+
+test('auto-decode: 4KB multi-encoding-lookalike input completes fast and under the default cap', () => {
+  const rnd = mulberry32(1234567);
+  const hexchars = '0123456789abcdef';
+  let big = '';
+  for (let i = 0; i < 4096; i++) big += hexchars[(rnd() * 16) | 0];
+  const t0 = performance.now();
+  const r = autoDecode(big);
+  const wall = performance.now() - t0;
+  assert.ok(wall < 1000, `should finish under 1s, took ${wall.toFixed(1)}ms`);
+  assert.ok(r.stats.attempts <= 400, `attempts (${r.stats.attempts}) must not exceed default cap 400`);
+});
+
+test('auto-decode: hard attempt cap is actually enforced on a maximally-branching input', () => {
+  // Deeply nested base64 branches heavily (each layer re-decodes + base85/base91
+  // garbage branches). Its natural (uncapped) attempt count is well above 20.
+  let s = 'The quick brown fox jumps over the lazy dog. '.repeat(6);
+  for (let i = 0; i < 4; i++) s = enc.base64Encode(s);
+
+  const uncapped = autoDecode(s, { maxAttempts: 100000 });
+  assert.ok(uncapped.stats.attempts > 20, `sanity: natural attempts (${uncapped.stats.attempts}) should exceed the test cap`);
+
+  const capped = autoDecode(s, { maxAttempts: 20 });
+  assert.ok(capped.stats.attempts <= 20, `attempts (${capped.stats.attempts}) must never exceed the cap`);
+  assert.equal(capped.stats.capHit, true, 'capHit flag must be set when the budget is exhausted');
+});
+
+// ---- 4. Cycle safety (rot13 is an involution) --------------------------
+
+test('auto-decode: detects the rot13 involution cycle and still recovers plaintext', () => {
+  const rotted = enc.rot13('hello world'); // 'uryyb jbeyq'
+  const r = autoDecode(rotted);
+  assert.equal(r.candidates[0].output, 'hello world');
+  assert.deepEqual(r.candidates[0].path, ['rot13']);
+  // rot13(rot13(x)) === x loops back to the seeded raw input -> must be caught.
+  assert.ok(r.stats.cyclesDetected >= 1, 'the rot13 -> rot13 loop must be detected and stopped');
+  assert.ok(r.stats.attempts < 400, 'a cycle must not blow the attempt budget');
+});
+
+// ---- 5. Scoring sanity: meaningful text beats noise --------------------
+
+test('auto-decode: English/JSON decodes score higher than random-noise decodes', () => {
+  const english = autoDecode(enc.base64Encode('this is the message and we know what they want now'));
+
+  // Deterministic binary noise (not text) -> its decode is low-printable garbage.
+  const rnd = mulberry32(99);
+  let noiseBytes = '';
+  for (let i = 0; i < 48; i++) noiseBytes += String.fromCharCode((rnd() * 256) | 0);
+  const noise = autoDecode(enc.base64Encode(noiseBytes));
+
+  assert.ok(english.candidates[0].score >= 0.5, 'english top should be high-confidence');
+  assert.ok(
+    english.candidates[0].score > noise.candidates[0].score,
+    `english (${english.candidates[0].score.toFixed(3)}) should outscore noise (${noise.candidates[0].score.toFixed(3)})`
+  );
+  // Within one result, the best-ranked candidate beats the worst-ranked one.
+  const eng = english.candidates;
+  assert.ok(eng[0].score >= eng[eng.length - 1].score);
+});
+
+test('auto-decode: valid JSON is recognised and scored/labelled as such', () => {
+  const r = autoDecode(enc.base64Encode('{"user":"admin","role":"root","n":[1,2,3]}'));
+  assert.equal(r.candidates[0].output, '{"user":"admin","role":"root","n":[1,2,3]}');
+  assert.deepEqual(r.candidates[0].path, ['base64']);
+  assert.ok(r.candidates[0].reasons.some((x) => /valid JSON/i.test(x)), 'reasons must credit valid JSON');
+});
+
+// ---- Hash identification is informational, kept out of decode candidates ----
+
+test('auto-decode: 32-hex input is surfaced as a hash (informational), separate from decodes', () => {
+  const r = autoDecode('d41d8cd98f00b204e9800998ecf8427e'); // MD5("")
+  assert.ok(r.hashInfo, 'hashInfo must be populated for a bare 32-hex string');
+  assert.equal(r.hashInfo.matches[0].algorithm, 'MD5');
+  assert.ok(/one-way hash/i.test(r.hashInfo.note));
+});
+
+test('auto-decode: graceful empty/no-op inputs never throw', () => {
+  assert.doesNotThrow(() => autoDecode(''));
+  assert.equal(autoDecode('').candidates.length, 0);
+  assert.doesNotThrow(() => autoDecode('   '));
+  const r = autoDecode('plain english sentence with no encoding at all');
+  assert.ok(Array.isArray(r.candidates), 'always returns a candidates array');
+  assert.ok(DECODER_NAMES.length >= 10, 'engine advertises its reused decoder set');
 });

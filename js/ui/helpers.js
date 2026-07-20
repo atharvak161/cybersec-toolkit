@@ -49,7 +49,7 @@ export function toolHeader(description) {
   }
   return el('div', { class: 'tool-copy' }, [
     el('p', { class: 'tool-copy-line' }, [el('strong', {}, 'What it does: '), description.what]),
-    el('p', { class: 'tool-copy-line' }, [el('strong', {}, 'When to use it: '), description.when])
+    el('p', { class: 'tool-copy-line' }, [el('strong', {}, 'Use case: '), description.when])
   ]);
 }
 
@@ -96,7 +96,11 @@ export function copyButton(getText) {
     try {
       await navigator.clipboard.writeText(getText());
       btn.textContent = 'Copied!';
-      setTimeout(() => (btn.textContent = 'Copy'), 1200);
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 1200);
     } catch {
       btn.textContent = 'Copy failed';
     }

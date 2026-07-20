@@ -12,17 +12,22 @@ import { ENCODING_TOOLS } from './ui/encoding-tools.js';
 import { HASHING_TOOLS } from './ui/hashing-tools.js';
 import { CRYPTO_TOOLS } from './ui/crypto-tools.js';
 import { RECIPE_TOOL } from './ui/recipe-tools.js';
+import { AUTO_DECODE_TOOLS } from './ui/auto-decode-tools.js';
 import { PASSWORD_TOOLS } from './ui/password-tools.js';
 import { FILES_TOOLS } from './ui/files-tools.js';
 import { NETWORK_TOOLS } from './ui/network-tools.js';
 import { DEV_TOOLS } from './ui/dev-tools.js';
 import { PENTEST_TOOLS } from './ui/pentest-tools.js';
 import { TOOL_COPY } from './data/tool-copy.js';
+import { openCommandPalette } from './ui/command-palette.js';
+import { attachTooltip } from './ui/tooltip.js';
 
 // ---------- 1. Information architecture (design spec §1) ----------
-// Recipe Chain is pinned above the category system entirely — it's a
-// distinct mode (chains other tools), not a peer of a single codec.
-const PINNED_CATEGORY = { name: 'Recipe Builder', slug: 'recipe-builder', tools: [RECIPE_TOOL] };
+// Recipe Chain and Auto-Decode are both pinned above the category system
+// entirely — each is a cross-cutting "meta tool" (chains other tools /
+// auto-tries every decoder in the toolkit) rather than a peer of a single
+// codec belonging to one category.
+const PINNED_CATEGORY = { name: 'Recipe Builder', slug: 'recipe-builder', tools: [RECIPE_TOOL, ...AUTO_DECODE_TOOLS] };
 
 const CATEGORIES = [
   {
@@ -102,6 +107,21 @@ let currentResults = [];
 let highlightedIndex = -1;
 let firstRender = true;
 
+// ---------- Hover-preview tooltips (design spec v4 §3) ----------
+// Tooltips attached to dynamically-rebuilt DOM (dashboard/section-landing
+// cards, sidebar search results) are tracked per render batch and torn
+// down before the next batch is built, so listeners never leak/stack.
+let contentTooltipCleanups = [];
+function clearContentTooltips() {
+  contentTooltipCleanups.forEach((fn) => typeof fn === 'function' && fn());
+  contentTooltipCleanups = [];
+}
+let searchResultTooltipCleanups = [];
+function clearSearchResultTooltips() {
+  searchResultTooltipCleanups.forEach((fn) => typeof fn === 'function' && fn());
+  searchResultTooltipCleanups = [];
+}
+
 // ---------- Lookup helpers ----------
 function findToolWithCategory(toolId) {
   for (const category of allCategoriesForLookup()) {
@@ -143,6 +163,7 @@ function setGroupExpanded(slug, expanded, { persist = true } = {}) {
 // Suppressed on the very first paint (page load) — the spec explicitly
 // rules out page-load animation sequences; only *swaps* animate.
 function swapContent(populate) {
+  clearContentTooltips();
   clear(content);
   populate(content);
   if (firstRender) {
@@ -170,14 +191,52 @@ function setBreadcrumb({ sectionName, sectionSlug, toolName } = {}) {
   }
 }
 
+// Truncates a copy sentence to just its first sentence (design spec §1 pt 4:
+// dashboard cards are tighter on space than section-landing pages, so a
+// 2-sentence category.intro is cut down to its first sentence only).
+function firstSentenceOnly(text) {
+  const idx = text.indexOf('. ');
+  return idx === -1 ? text : text.slice(0, idx + 1);
+}
+
 // ---------- Rendering: home / tool / section landing ----------
 function renderHome() {
   swapContent((container) => {
-    container.appendChild(el('div', {}, [
-      el('h1', { class: 'home-title' }, 'Welcome to cybersec-toolkit'),
-      el('p', { class: 'tool-copy-line' }, 'A static, client-side-only cybersecurity toolkit — nothing you type is sent anywhere except the few tools explicitly marked with a 🌐 badge (HIBP breach check, DNS lookup, WHOIS lookup, IP geolocation), each of which shows exactly what it calls before you use it.'),
-      el('p', { class: 'tool-copy-line' }, `Pick a tool from the sidebar, browse a section for an overview, or press "/" to search all ${TOTAL_TOOL_COUNT} tools. The Recipe Chain — pinned above the sidebar search box — lets you pipe multiple operations together; it's the best place to start.`)
-    ]));
+    const eyebrow = el('p', { class: 'section-eyebrow' }, 'CYBERSEC-TOOLKIT · 100% CLIENT-SIDE');
+    const title = el('h1', { class: 'home-title' }, `${TOTAL_TOOL_COUNT} tools, ${CATEGORIES.length} sections, zero servers.`);
+    const meta = el('p', { class: 'dashboard-meta tabular-nums' }, 'Nothing you type is sent anywhere except the 4 tools explicitly marked 🌐 (HIBP breach check, DNS lookup, WHOIS lookup, IP geolocation), each of which shows exactly what it calls before you use it.');
+
+    // One hero card per pinned tool — same dashboard-hero treatment Recipe
+    // Chain always had. Recipe Chain keeps its existing "Recipe Builder"
+    // branded title (PINNED_CATEGORY.name predates the second pinned tool);
+    // Auto-Decode has no separate brand name, so its own tool name is used.
+    const heroes = PINNED_CATEGORY.tools.map((tool) => {
+      const heroCopy = TOOL_COPY[tool.id];
+      const heroTitle = tool.id === RECIPE_TOOL.id ? PINNED_CATEGORY.name : tool.name;
+      const hero = el('button', { class: 'landing-card dashboard-hero' }, [
+        el('h3', { class: 'landing-card-title' }, heroTitle),
+        el('p', { class: 'landing-card-desc' }, heroCopy ? heroCopy.what : '')
+      ]);
+      hero.addEventListener('click', () => selectTool(tool.id));
+      contentTooltipCleanups.push(attachTooltip(hero, () => [tool.name]));
+      return hero;
+    });
+
+    const grid = el('div', { class: 'card-grid' }, CATEGORIES.map((category) => {
+      const isPentest = category.slug === 'pentest-ctf-reference';
+      const card = el('button', { class: isPentest ? 'landing-card dashboard-card-info' : 'landing-card' }, [
+        el('div', { class: 'landing-card-header' }, [
+          el('h3', { class: 'landing-card-title' }, category.name),
+          el('span', { class: 'landing-card-count' }, `${category.tools.length} tools`)
+        ]),
+        el('p', { class: 'landing-card-desc' }, firstSentenceOnly(category.intro))
+      ]);
+      card.addEventListener('click', () => navigateToSection(category.slug));
+      contentTooltipCleanups.push(attachTooltip(card, () => category.tools.map((t) => t.name)));
+      return card;
+    }));
+
+    container.appendChild(el('div', { class: 'dashboard' }, [eyebrow, title, meta, ...heroes, grid]));
   });
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
   setBreadcrumb({ toolName: 'Welcome' });
@@ -215,11 +274,19 @@ function renderSectionLanding(category) {
     const intro = el('p', { class: 'section-intro' }, category.intro);
     const grid = el('div', { class: 'card-grid' }, category.tools.map((tool) => {
       const copy = TOOL_COPY[tool.id];
+      const badge = EXTERNAL_API_TOOL_IDS.has(tool.id) ? el('span', { class: 'badge' }, '🌐') : null;
       const card = el('button', { class: 'landing-card' }, [
-        el('h3', { class: 'landing-card-title' }, tool.name),
+        el('div', { class: 'landing-card-header' }, [
+          el('h3', { class: 'landing-card-title' }, tool.name),
+          badge
+        ]),
         el('p', { class: 'landing-card-desc' }, copy ? copy.what : '')
       ]);
       card.addEventListener('click', () => selectTool(tool.id));
+      // { when } only (no `what` key) — tooltip.js's object branch renders
+      // just the "USE CASE" line for this shape; `what` is already visible
+      // on the card face (landing-card-desc), so it's omitted here per spec.
+      contentTooltipCleanups.push(attachTooltip(card, () => ({ when: copy ? copy.when : '' })));
       return card;
     }));
     container.appendChild(el('div', { class: 'section-landing' }, [eyebrow, title, intro, grid]));
@@ -279,12 +346,17 @@ function navigateToSection(slug) {
 
 window.addEventListener('hashchange', route);
 
-// ---------- Sidebar: pinned Recipe Chain ----------
+// ---------- Sidebar: pinned meta-tools (Recipe Chain, Auto-Decode) ----------
 function buildPinned() {
   clear(navPinned);
-  const item = el('button', { class: 'nav-item', 'data-tool-id': RECIPE_TOOL.id }, [el('span', {}, RECIPE_TOOL.name)]);
-  item.addEventListener('click', () => selectTool(RECIPE_TOOL.id));
-  navPinned.appendChild(item);
+  for (const tool of PINNED_CATEGORY.tools) {
+    const item = el('button', { class: 'nav-item', 'data-tool-id': tool.id }, [el('span', {}, tool.name)]);
+    item.addEventListener('click', () => selectTool(tool.id));
+    navPinned.appendChild(item);
+    // Sidebar nav is built exactly once at init and never torn down, so the
+    // cleanup fn attachTooltip returns has no rebuild moment to run at here.
+    attachTooltip(item, () => TOOL_COPY[tool.id] || { what: '', when: '' });
+  }
 }
 
 // ---------- Sidebar: collapsible category groups (design spec §2B) ----------
@@ -319,6 +391,7 @@ function buildNav() {
       const badge = EXTERNAL_API_TOOL_IDS.has(tool.id) ? el('span', { class: 'badge' }, '🌐') : null;
       const item = el('button', { class: 'nav-item', 'data-tool-id': tool.id }, [el('span', {}, tool.name), badge]);
       item.addEventListener('click', () => selectTool(tool.id));
+      attachTooltip(item, () => TOOL_COPY[tool.id] || { what: '', when: '' });
       bodyInner.appendChild(item);
     }
     const body = el('div', { class: 'nav-group-body' }, [bodyInner]);
@@ -399,6 +472,7 @@ function activateHighlighted() {
 
 function renderSearchResults(query) {
   const q = query.trim().toLowerCase();
+  clearSearchResultTooltips();
   clear(resultsContainer);
   currentResults = computeSearchResults(query);
   highlightedIndex = currentResults.length ? 0 : -1;
@@ -417,8 +491,9 @@ function renderSearchResults(query) {
   }
 
   currentResults.forEach((r, i) => {
+    const badge = EXTERNAL_API_TOOL_IDS.has(r.tool.id) ? el('span', { class: 'badge' }, '🌐') : null;
     const item = el('button', { class: 'nav-result-item' }, [
-      el('div', { class: 'nav-result-name' }, highlightMatch(r.tool.name, q)),
+      el('div', { class: 'nav-result-name' }, [...highlightMatch(r.tool.name, q), badge]),
       el('div', { class: 'nav-result-section' }, r.category.name),
       r.excerpt ? el('div', { class: 'nav-result-excerpt' }, r.excerpt) : null
     ]);
@@ -427,6 +502,7 @@ function renderSearchResults(query) {
       highlightedIndex = i;
       updateHighlightClasses();
     });
+    searchResultTooltipCleanups.push(attachTooltip(item, () => TOOL_COPY[r.tool.id] || { what: '', when: '' }));
     resultsContainer.appendChild(item);
   });
   updateHighlightClasses();
@@ -435,6 +511,7 @@ function renderSearchResults(query) {
 function clearSearch() {
   searchInput.value = '';
   setSearchMode(false);
+  clearSearchResultTooltips();
   clear(resultsContainer);
   currentResults = [];
   highlightedIndex = -1;
@@ -452,6 +529,7 @@ searchInput.addEventListener('input', () => {
       renderSearchResults(query);
     } else {
       setSearchMode(false);
+      clearSearchResultTooltips();
       clear(resultsContainer);
       currentResults = [];
       highlightedIndex = -1;
@@ -485,6 +563,18 @@ window.addEventListener('keydown', (e) => {
   if (isTyping) return;
   e.preventDefault();
   searchInput.focus();
+});
+
+// Global Cmd+K / Ctrl+K opens the command palette (design spec v4 §2) — a
+// second, additional path alongside "/", not a replacement. Unlike "/",
+// this fires unconditionally regardless of focus (even inside a tool's own
+// input/textarea), per the spec's explicit "power-user path" decision.
+// Reuses the exact same search index (computeSearchResults) and navigation
+// (selectTool) the sidebar already uses — no forked matching logic.
+window.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'k') return;
+  e.preventDefault();
+  openCommandPalette({ searchFn: computeSearchResults, onSelect: selectTool });
 });
 
 document.getElementById('menu-toggle').addEventListener('click', () => {
