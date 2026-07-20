@@ -6,7 +6,7 @@
  * All logic lives in js/lib/auto-decode.js — this file is presentation only.
  */
 
-import { autoDecode, DECODER_NAMES } from '../lib/auto-decode.js';
+import { autoDecode, DECODER_NAMES, MAX_INPUT_LENGTH } from '../lib/auto-decode.js';
 import { el, clear, toolHeader, copyButton, showError } from './helpers.js';
 import { TOOL_COPY } from '../data/tool-copy.js';
 
@@ -77,7 +77,8 @@ export const AUTO_DECODE_TOOLS = [
       const resultsNode = el('div', { class: 'auto-decode-results' });
 
       const helpLine = el('p', { class: 'tool-desc', style: 'margin-top:6px' },
-        `Tries ${DECODER_NAMES.length} decoders (${DECODER_NAMES.join(', ')}) and recursively peels layered encodings.`);
+        `Tries ${DECODER_NAMES.length} decoders (${DECODER_NAMES.join(', ')}) and recursively peels layered encodings. ` +
+        `Limit: ${MAX_INPUT_LENGTH.toLocaleString()} characters per input.`);
 
       function run() {
         clear(errorNode);
@@ -93,6 +94,21 @@ export const AUTO_DECODE_TOOLS = [
           result = autoDecode(value);
         } catch (err) {
           showError(errorNode, err);
+          return;
+        }
+
+        if (result.stats.sizeCapped) {
+          const actual = result.stats.inputLength.toLocaleString();
+          const limit = result.stats.maxInputLength.toLocaleString();
+          resultsNode.appendChild(el('div', { class: 'card educational-badge-wrap', style: 'margin-top:14px' }, [
+            el('div', { class: 'educational-badge' }, 'Input too large to decode'),
+            el('p', { class: 'tool-desc', style: 'margin-top:8px' },
+              `That's ${actual} characters — over the ${limit}-character limit for Auto-Decode. ` +
+              'Nothing was processed (this guard runs before any decoding, precisely to avoid a slow ' +
+              'freeze on very large pastes). Paste a shorter mystery string — a JWT, token, config ' +
+              'blob, or typical CTF ciphertext are all comfortably under this limit — or use one of ' +
+              'the dedicated Base64/hex tools for large data.')
+          ]));
           return;
         }
 

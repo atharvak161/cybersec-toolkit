@@ -48,7 +48,7 @@ import { analyzeHeaders } from '../js/lib/http-headers.js';
 import { searchPorts } from '../js/lib/ports-reference.js';
 import { generateReverseShell, SHELL_TYPES } from '../js/lib/reverse-shell.js';
 import { aesEncryptBytes, aesDecryptBytes } from '../js/lib/aes.js';
-import { autoDecode, DECODER_NAMES } from '../js/lib/auto-decode.js';
+import { autoDecode, DECODER_NAMES, MAX_INPUT_LENGTH } from '../js/lib/auto-decode.js';
 
 // ============================================================
 // Encoding
@@ -1431,4 +1431,202 @@ test('auto-decode: graceful empty/no-op inputs never throw', () => {
   const r = autoDecode('plain english sentence with no encoding at all');
   assert.ok(Array.isArray(r.candidates), 'always returns a candidates array');
   assert.ok(DECODER_NAMES.length >= 10, 'engine advertises its reused decoder set');
+});
+
+// ---- 6. QA bounce fix (commit 552a0e2): scoring calibration --------------
+// QA's repro: a correct single-layer decode of ordinary technical/non-prose
+// content (no common-English words to match) landed at the "printable+UTF8
+// only" floor (40%), below the 50% high-confidence cutoff, and so was hidden
+// under "Show N more (low confidence)" despite being the single unambiguous
+// correct answer. Fixed via a dictionary-free structure signal (see
+// naturalCharRatio()/hasWhitespace() in auto-decode.js) that credits real
+// content generally, not just dictionary-word prose.
+
+test('auto-decode: QA repro — non-dictionary technical sentence scores high-confidence, not buried', () => {
+  const plain = 'QA independent check 552a0e2';
+  const r = autoDecode(enc.hexEncode(plain));
+  assert.equal(r.candidates[0].output, plain, 'plaintext must still be the #1 ranked candidate');
+  assert.deepEqual(r.candidates[0].path, ['hex']);
+  assert.ok(
+    r.candidates[0].score >= 0.5,
+    `QA repro must clear the high-confidence cutoff, scored ${r.candidates[0].score.toFixed(3)}`
+  );
+});
+
+test('auto-decode: other non-dictionary technical decodes (ids, config, commit-ish strings) also clear the cutoff', () => {
+  const cases = [
+    'deploy build 91a3f2 to staging cluster now',
+    'config value X-Request-Id set to abc123',
+    'commit 4e91f0a2 failed lint stage two',
+    'ticket ENG-4021 blocked on review'
+  ];
+  for (const plain of cases) {
+    const r = autoDecode(enc.hexEncode(plain));
+    assert.equal(r.candidates[0].output, plain, `should recover: ${plain}`);
+    assert.ok(r.candidates[0].score >= 0.5, `"${plain}" should be high-confidence, scored ${r.candidates[0].score.toFixed(3)}`);
+  }
+});
+
+test('auto-decode: ambiguous rot13 of non-dictionary text still outranks wrong-decoder guesses on the same ciphertext', () => {
+  const tech = 'Server node K7 restart pending 0x3F2A';
+  const rotted = enc.rot13(tech);
+  const r = autoDecode(rotted);
+  assert.equal(r.candidates[0].output, tech, 'true rot13 decode must still be the top candidate');
+  assert.deepEqual(r.candidates[0].path, ['rot13']);
+  assert.ok(r.candidates[0].score >= 0.5, 'true decode of non-dictionary text must be high-confidence');
+  // Every other (wrong-decoder) candidate produced from the same ciphertext
+  // must rank clearly below the true decode — no regression in discriminating
+  // power between the real answer and coincidental garbage from other decoders.
+  for (const c of r.candidates.slice(1)) {
+    assert.ok(c.score < r.candidates[0].score, `wrong-decoder candidate outranked the true decode: ${JSON.stringify(c)}`);
+  }
+});
+
+test('auto-decode: no-known-encoding / coincidental noise does not get a falsely confident score', () => {
+  // Random byte noise run through base64 (same construction as the
+  // English-vs-noise test above, at a wider sweep of seeds/lengths) must
+  // never cross the high-confidence cutoff, even post-fix.
+  let maxNoiseScore = 0;
+  for (let seed = 0; seed < 150; seed++) {
+    const rnd = mulberry32(2000 + seed * 7);
+    const len = 20 + ((rnd() * 60) | 0);
+    let noiseBytes = '';
+    for (let i = 0; i < len; i++) noiseBytes += String.fromCharCode((rnd() * 256) | 0);
+    const r = autoDecode(enc.base64Encode(noiseBytes));
+    if (r.candidates.length === 0) continue;
+    maxNoiseScore = Math.max(maxNoiseScore, r.candidates[0].score);
+  }
+  assert.ok(maxNoiseScore < 0.5, `random-byte noise must stay below high-confidence, max observed ${maxNoiseScore.toFixed(3)}`);
+
+  // A plain string that isn't any supported encoding at all must not produce
+  // a falsely confident candidate either (and must not throw).
+  const r2 = autoDecode('this is not encoded in anything, just a sentence sitting here');
+  for (const c of r2.candidates) {
+    assert.ok(c.score < 1.01, 'sanity: score is always a valid 0..1 value');
+  }
+});
+
+// ---- 6b. QA bounce cycle 2: narrow-alphabet random-token false positives -
+// Regression guard for the exact class QA found on the 552a0e2 scoring fix:
+// pasting a random hex/base64/base32 token (an ordinary "identify this
+// nonce/hash/blob" action) must NOT be promoted to high-confidence ("Most
+// likely"). The leak was the weak, no-whitespace natural-char tier stacking
+// with coincidental 2-letter common-word substrings ("no"/"on"/"or"/"so",
+// inevitable once hex's a-f alphabet rot13's into the n-s band) to push pure
+// noise over the 0.5 cutoff. Fixed by: (a) reducing the weak-tier bonus,
+// (b) requiring matched words of length >= 3 on a whitespace-less token, and
+// gating the word signal out entirely below 85% printable. QA's own repro was
+// 1,000 random hex strings of length 40-440; this test reproduces that exact
+// methodology (at a committed 300/alphabet for CI speed — the full 1,000+ was
+// run out-of-band and is 0 crossings in this length band for all three
+// alphabets) and extends it to base64 AND base32, which the prior suite never
+// covered. Acceptance bar: ZERO crossings in the 40-440 length band.
+function randomTokenNoiseCrossings(alphabet, seedBase, trials, minLen, maxLen, evenLenOnly) {
+  let crossings = 0;
+  let maxScore = 0;
+  for (let i = 0; i < trials; i++) {
+    const rnd = mulberry32((seedBase + i * 2654435761) >>> 0);
+    let len = minLen + ((rnd() * (maxLen - minLen + 1)) | 0);
+    if (evenLenOnly && len % 2 === 1) len++;
+    let s = '';
+    for (let j = 0; j < len; j++) s += alphabet[(rnd() * alphabet.length) | 0];
+    const r = autoDecode(s);
+    if (r.candidates.length === 0) continue;
+    const top = r.candidates[0].score;
+    if (top > maxScore) maxScore = top;
+    if (top >= 0.5) crossings++;
+  }
+  return { crossings, maxScore };
+}
+
+test('auto-decode: random hex tokens (40-440 chars) never reach high-confidence [QA bounce-2 regression]', () => {
+  const { crossings, maxScore } = randomTokenNoiseCrossings(
+    '0123456789abcdef', 424242, 300, 40, 440, true
+  );
+  assert.equal(
+    crossings, 0,
+    `random hex noise must never cross the 0.5 high-confidence cutoff, saw ${crossings}/300 (max ${maxScore.toFixed(3)})`
+  );
+});
+
+test('auto-decode: random base64 tokens (40-440 chars) never reach high-confidence [QA bounce-2 regression]', () => {
+  const { crossings, maxScore } = randomTokenNoiseCrossings(
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', 918273, 300, 40, 440, false
+  );
+  assert.equal(
+    crossings, 0,
+    `random base64 noise must never cross the 0.5 high-confidence cutoff, saw ${crossings}/300 (max ${maxScore.toFixed(3)})`
+  );
+});
+
+test('auto-decode: random base32 tokens (40-440 chars) never reach high-confidence [QA bounce-2 regression]', () => {
+  const { crossings, maxScore } = randomTokenNoiseCrossings(
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', 555111, 300, 40, 440, false
+  );
+  assert.equal(
+    crossings, 0,
+    `random base32 noise must never cross the 0.5 high-confidence cutoff, saw ${crossings}/300 (max ${maxScore.toFixed(3)})`
+  );
+});
+
+test('auto-decode: bounce-2 fix does not regress true single-layer decodes of real sentences', () => {
+  // The complement of the false-positive guard: a genuine plain-English
+  // sentence run through exactly one encoding layer must STILL be the #1
+  // candidate and STILL clear the high-confidence cutoff, for every base
+  // alphabet whose noise we now reject.
+  const sentences = [
+    'the quick brown fox jumps over the lazy dog',
+    'all your base are belong to us now',
+    'this is a secret message for you to read'
+  ];
+  const layers = [
+    ['hex', (p) => enc.hexEncode(p)],
+    ['base64', (p) => enc.base64Encode(p)],
+    ['base32', (p) => enc.base32Encode(p)]
+  ];
+  for (const [layerName, encodeFn] of layers) {
+    for (const plain of sentences) {
+      const r = autoDecode(encodeFn(plain));
+      assert.equal(r.candidates[0].output, plain, `${layerName}: plaintext must be #1 for "${plain}"`);
+      assert.ok(
+        r.candidates[0].score >= 0.5,
+        `${layerName}: "${plain}" must stay high-confidence, scored ${r.candidates[0].score.toFixed(3)}`
+      );
+    }
+  }
+});
+
+// ---- 7. QA bounce fix (commit 552a0e2): input-size guard -----------------
+// QA reproduced a 6758ms synchronous main-thread freeze feeding a
+// 400,000-char paste to the live tool. Fixed via a hard length cap checked
+// before any processing (MAX_INPUT_LENGTH in auto-decode.js).
+
+test('auto-decode: oversized input is rejected by the size guard, not processed through the engine', () => {
+  assert.equal(MAX_INPUT_LENGTH, 20000, 'sanity: test assumes the documented default cap');
+
+  const big = 'a'.repeat(400000);
+  const t0 = performance.now();
+  const r = autoDecode(big);
+  const wall = performance.now() - t0;
+
+  assert.equal(r.stats.sizeCapped, true, 'stats must flag that the size guard fired');
+  assert.equal(r.stats.inputLength, 400000);
+  assert.equal(r.stats.maxInputLength, MAX_INPUT_LENGTH);
+  assert.equal(r.candidates.length, 0, 'no decode attempts should run on an oversized input');
+  assert.equal(r.hashInfo, null);
+  assert.ok(wall < 50, `size guard must be near-instant regardless of input size, took ${wall.toFixed(1)}ms`);
+});
+
+test('auto-decode: size guard boundary — exactly at the cap processes normally, one over is rejected', () => {
+  const atLimit = autoDecode('a'.repeat(MAX_INPUT_LENGTH));
+  assert.equal(atLimit.stats.sizeCapped, false, 'input exactly at the cap must be processed normally');
+
+  const overLimit = autoDecode('a'.repeat(MAX_INPUT_LENGTH + 1));
+  assert.equal(overLimit.stats.sizeCapped, true, 'one character over the cap must be rejected');
+});
+
+test('auto-decode: size guard is overridable via options (for callers/tests that need a different cap)', () => {
+  const r = autoDecode('a'.repeat(100), { maxInputLength: 50 });
+  assert.equal(r.stats.sizeCapped, true);
+  assert.equal(r.stats.maxInputLength, 50);
 });
