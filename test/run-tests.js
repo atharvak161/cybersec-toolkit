@@ -33,7 +33,8 @@ import { epochSecondsToIso, epochMillisToIso, isoToEpochSeconds, autoDetectEpoch
 import { diffLines, diffSummary } from '../js/lib/diff.js';
 import { lookupHashInDemoWordlist, SUPPORTED_ALGORITHMS } from '../js/lib/wordlist-lookup.js';
 import { COMMON_PASSWORDS_DEMO } from '../data/common-passwords.js';
-import { parseDnsResponse, parseRdapResponse, parseIpGeoResponse, buildDnsUrl, buildRdapUrl, buildIpGeoUrl, lookupWhois } from '../js/lib/net-lookups.js';
+import { parseDnsResponse, parseRdapResponse, parseIpGeoResponse, buildDnsUrl, buildRdapUrl, buildIpGeoUrl, lookupWhois, lookupDns, isPlausibleDomain } from '../js/lib/net-lookups.js';
+import { crackTimeLog10Seconds, humanizeLog10Seconds, verdictBand, assessStrength, ATTACKER_TIERS } from '../js/lib/crack-time.js';
 import { qrEncode, QR_CAPACITY } from '../js/lib/qr-encode.js';
 import { qrDecode } from '../js/lib/qr-decode.js';
 import { hotp, generateTotp } from '../js/lib/totp.js';
@@ -2033,4 +2034,96 @@ test('email-headers: analyzeEmailHeaders ties basics + received chain + authenti
   assert.equal(result.basics.subject, 'Test message');
   assert.equal(result.receivedChain.hopCount, 3);
   assert.equal(result.authentication.verdicts.dmarc, 'pass');
+});
+
+// ---------------------------------------------------------------------------
+// crack-time.js — password strength / crack-time estimation (pure)
+// ---------------------------------------------------------------------------
+test('crack-time: crackTimeLog10Seconds matches the 2^(bits-1)/rate model', () => {
+  // 41 bits at 1e12/s: 2^40 / 1e12 = 1.0995e12/1e12 ≈ 1.0995 s -> log10 ≈ 0.041
+  const log10s = crackTimeLog10Seconds(41, 1e12);
+  assert.ok(Math.abs(log10s - Math.log10(Math.pow(2, 40) / 1e12)) < 1e-9);
+});
+
+test('crack-time: humanize scales from instant through years to universe ages', () => {
+  assert.equal(humanizeLog10Seconds(-5), 'instantly');
+  assert.match(humanizeLog10Seconds(Math.log10(200)), /minutes$/);            // ~3 min, avoids the .5 rounding boundary
+  assert.equal(humanizeLog10Seconds(Math.log10(7200)), '2 hours');
+  assert.equal(humanizeLog10Seconds(Math.log10(31557600 * 5)), '5 years');
+  assert.match(humanizeLog10Seconds(Math.log10(31557600 * 1e12)), /universe/);
+  assert.equal(humanizeLog10Seconds(Infinity), 'effectively forever');
+});
+
+test('crack-time: verdict bands are monotonic and hit the documented extremes', () => {
+  assert.equal(verdictBand(10).id, 'catastrophic');
+  assert.equal(verdictBand(35).id, 'catastrophic');
+  assert.equal(verdictBand(36).id, 'critical');
+  assert.equal(verdictBand(65).id, 'fair');
+  assert.equal(verdictBand(75).id, 'strong');
+  assert.equal(verdictBand(128).id, 'fortress');
+  assert.equal(verdictBand(300).id, 'fortress');
+});
+
+test('crack-time: assessStrength returns a tier per attacker with a human time each', () => {
+  const a = assessStrength(80);
+  assert.equal(a.tiers.length, ATTACKER_TIERS.length);
+  for (const t of a.tiers) {
+    assert.ok(typeof t.human === 'string' && t.human.length > 0);
+    assert.ok(Number.isFinite(t.log10Seconds));
+  }
+  // Stronger attacker => shorter time (larger rate, smaller log10 seconds).
+  const online = a.tiers.find((t) => t.id === 'online');
+  const nation = a.tiers.find((t) => t.id === 'nation-state');
+  assert.ok(online.log10Seconds > nation.log10Seconds);
+});
+
+test('crack-time: a weak password reads catastrophic, a long random one reads fortress', () => {
+  const weak = assessStrength(20);
+  assert.equal(weak.band.id, 'catastrophic');
+  assert.ok(weak.barFill < 0.2);
+
+  const strong = assessStrength(131);   // e.g. length 20 over a ~90-char set
+  assert.equal(strong.band.id, 'fortress');
+  assert.equal(strong.barFill, 1);      // saturates at 128 bits
+  assert.match(strong.band.message, /supercomputer|universe/);
+});
+
+test('crack-time: message interpolation leaves no unfilled placeholders', () => {
+  for (const bits of [10, 40, 55, 65, 75, 90, 140]) {
+    const msg = assessStrength(bits).band.message;
+    assert.ok(!/\{(ref|nation|anchor)\}/.test(msg), `unfilled placeholder at ${bits} bits: ${msg}`);
+  }
+});
+
+test('crack-time: barFill is clamped to [0,1]', () => {
+  assert.equal(assessStrength(0).barFill, 0);
+  assert.equal(assessStrength(-5).barFill, 0);
+  assert.equal(assessStrength(1000).barFill, 1);
+});
+
+// ---------------------------------------------------------------------------
+// net-lookups.js — friendly input validation on DNS lookups (the empty/bad
+// domain fix; no network involved — rejection happens before any fetch)
+// ---------------------------------------------------------------------------
+test('net-lookups: isPlausibleDomain accepts real domains and rejects junk', () => {
+  for (const d of ['example.com', 'sub.example.co.uk', 'a.io', '_dmarc.example.com']) {
+    assert.equal(isPlausibleDomain(d), true, d);
+  }
+  for (const d of ['', '   ', 'not a domain', 'http://example.com', 'example.com/path', 'localhost', 'exa mple.com']) {
+    assert.equal(isPlausibleDomain(d), false, d);
+  }
+});
+
+test('net-lookups: lookupDns rejects empty/invalid input before any fetch (friendly message)', async () => {
+  const neverFetch = () => { throw new Error('fetch should not have been called'); };
+  await assert.rejects(() => lookupDns('', 'TXT', neverFetch), /Enter a domain name/);
+  await assert.rejects(() => lookupDns('http://example.com/path', 'A', neverFetch), /doesn't look like a domain/);
+});
+
+test('net-lookups: lookupDns turns a non-JSON (HTML error page) response into a friendly message', async () => {
+  const htmlErrorFetch = () => Promise.resolve({
+    ok: false,
+    json: () => Promise.reject(new SyntaxError("Unexpected token '<'"))
+  });
+  await assert.rejects(() => lookupDns('example.com', 'TXT', htmlErrorFetch), /did not return a valid response/);
 });

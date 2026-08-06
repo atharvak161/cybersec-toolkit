@@ -3,8 +3,54 @@ import { checkHibp } from '../lib/hibp.js';
 import { lookupHashInDemoWordlist, SUPPORTED_ALGORITHMS } from '../lib/wordlist-lookup.js';
 import { generatePassword, estimateEntropyBits } from '../lib/password-gen.js';
 import { generatePassphrase, WORDLIST_SIZE } from '../lib/diceware.js';
+import { assessStrength } from '../lib/crack-time.js';
 import { el, toolHeader, clear, resultLine, showError, externalApiBadge, educationalBadge, copyButton } from './helpers.js';
 import { TOOL_COPY } from '../data/tool-copy.js';
+
+/**
+ * Builds the live "how strong is this / how long to crack it" panel for the
+ * password generator, from a plain entropy value. All text goes through the
+ * el() text-node path — no innerHTML, nothing user-controlled is interpolated
+ * as markup (the only inputs are numbers and this module's own copy).
+ */
+function renderStrengthMeter(entropyBits) {
+  const a = assessStrength(entropyBits);
+
+  const panel = el('div', { class: `pw-meter pw-band-${a.band.id}` });
+
+  // Verdict headline + plain-English message.
+  panel.appendChild(el('div', { class: 'pw-verdict' }, [
+    el('span', { class: 'pw-verdict-icon' }, a.band.icon),
+    el('div', {}, [
+      el('div', { class: 'pw-verdict-head' }, `${a.band.label} — ${a.band.headline}`),
+      el('div', { class: 'pw-verdict-msg' }, a.band.message)
+    ])
+  ]));
+
+  // Strength bar.
+  panel.appendChild(el('div', { class: 'pw-bar', title: `${a.entropyBits} bits of entropy` }, [
+    el('div', { class: 'pw-bar-fill', style: `width:${Math.round(a.barFill * 100)}%` })
+  ]));
+
+  panel.appendChild(el('div', { class: 'pw-meter-meta' },
+    `${a.entropyBits} bits of entropy · generated with crypto.getRandomValues — nothing is sent anywhere`));
+
+  // Per-attacker crack-time table — the "who could break this, and how long".
+  const rows = a.tiers.map((t) => el('tr', { class: t.id === a.referenceTierId ? 'pw-ref-row' : '' }, [
+    el('td', { class: 'pw-tier-icon' }, t.icon),
+    el('td', { class: 'pw-tier-name' }, [
+      el('div', {}, t.name),
+      el('div', { class: 'pw-tier-detail' }, t.detail)
+    ]),
+    el('td', { class: 'pw-tier-time tabular-nums' }, t.human)
+  ]));
+  panel.appendChild(el('table', { class: 'pw-crack' }, [
+    el('caption', {}, 'How long to crack it by pure brute force'),
+    el('tbody', {}, rows)
+  ]));
+
+  return panel;
+}
 
 export const PASSWORD_TOOLS = [
   {
@@ -134,35 +180,63 @@ export const PASSWORD_TOOLS = [
       const digitsCheck = el('input', { type: 'checkbox', checked: 'true', style: 'width:auto' });
       const symbolsCheck = el('input', { type: 'checkbox', checked: 'true', style: 'width:auto' });
       const excludeAmbiguousCheck = el('input', { type: 'checkbox', style: 'width:auto' });
+      const lengthRange = el('input', { type: 'range', min: '4', max: '128', value: '16', style: 'flex:1; min-width:140px' });
       const generateBtn = el('button', { class: 'btn' }, 'Generate password');
       const output = el('input', { type: 'text', readonly: 'true', class: 'output tabular-nums', style: 'font-size:16px' });
-      const entropyLine = el('div', { class: 'tool-desc' }, '');
+      const strengthPanel = el('div', { class: 'pw-strength' });
       const errorNode = el('div', {});
 
       function checkboxRow(checkbox, label) {
         return el('label', { style: 'display:flex; align-items:center; gap:6px; width:auto' }, [checkbox, label]);
       }
 
+      function currentOpts() {
+        return {
+          length: parseInt(lengthInput.value, 10) || 16,
+          upper: upperCheck.checked,
+          lower: lowerCheck.checked,
+          digits: digitsCheck.checked,
+          symbols: symbolsCheck.checked,
+          excludeAmbiguous: excludeAmbiguousCheck.checked
+        };
+      }
+
+      // Live strength verdict: recomputes from the CURRENT settings on every
+      // change (entropy is a property of the settings, not the specific
+      // string), so the user watches the rating climb as they drag length up
+      // and can make the right call before generating anything.
+      function refreshStrength() {
+        clear(strengthPanel);
+        if (!upperCheck.checked && !lowerCheck.checked && !digitsCheck.checked && !symbolsCheck.checked) {
+          strengthPanel.appendChild(el('div', { class: 'tool-desc' }, 'Select at least one character set.'));
+          return;
+        }
+        strengthPanel.appendChild(renderStrengthMeter(estimateEntropyBits(currentOpts())));
+      }
+
+      // Keep the number box and the slider in lock-step, and re-rate live.
+      lengthRange.addEventListener('input', () => { lengthInput.value = lengthRange.value; refreshStrength(); });
+      lengthInput.addEventListener('input', () => {
+        const v = Math.max(4, Math.min(128, parseInt(lengthInput.value, 10) || 16));
+        lengthRange.value = String(v);
+        refreshStrength();
+      });
+      for (const c of [upperCheck, lowerCheck, digitsCheck, symbolsCheck, excludeAmbiguousCheck]) {
+        c.addEventListener('change', refreshStrength);
+      }
+
       generateBtn.addEventListener('click', () => {
         clear(errorNode);
         try {
-          const opts = {
-            length: parseInt(lengthInput.value, 10) || 16,
-            upper: upperCheck.checked,
-            lower: lowerCheck.checked,
-            digits: digitsCheck.checked,
-            symbols: symbolsCheck.checked,
-            excludeAmbiguous: excludeAmbiguousCheck.checked
-          };
-          output.value = generatePassword(opts);
-          entropyLine.textContent = `~${estimateEntropyBits(opts)} bits of entropy — generated with crypto.getRandomValues, nothing sent anywhere.`;
+          output.value = generatePassword(currentOpts());
+          refreshStrength();
         } catch (err) {
           showError(errorNode, err);
         }
       });
 
       container.appendChild(el('div', { class: 'card' }, [
-        el('div', { class: 'field-row' }, [el('label', {}, 'Length'), lengthInput]),
+        el('div', { class: 'field-row' }, [el('label', {}, 'Length'), lengthInput, lengthRange]),
         el('div', { class: 'field-row' }, [
           checkboxRow(upperCheck, 'Uppercase (A-Z)'),
           checkboxRow(lowerCheck, 'Lowercase (a-z)'),
@@ -174,8 +248,10 @@ export const PASSWORD_TOOLS = [
         errorNode,
         el('label', { style: 'margin-top:10px' }, 'Generated password'), output,
         el('div', { class: 'field-row', style: 'margin-top:6px' }, [copyButton(() => output.value)]),
-        entropyLine
+        strengthPanel
       ]));
+
+      refreshStrength();
     }
   },
   {

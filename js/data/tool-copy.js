@@ -131,8 +131,8 @@ export const TOOL_COPY = {
     when: 'You want to show yourself, a student, or a team how trivially a hash of password123 reverses via a lookup table, to make the case for better password hygiene.'
   },
   'password-generator': {
-    what: 'Generates cryptographically random passwords with a length and character set you configure.',
-    when: 'A signup form demands "12+ characters, one symbol, one number" and you want a strong password that satisfies it in one click, instead of typing something you\'ll end up reusing.'
+    what: 'Generates cryptographically random passwords with a length and character set you configure, and rates them live — showing how long it would take everyone from an online guesser to a nation-state supercomputer to brute-force what you chose.',
+    when: 'A signup form demands "12+ characters, one symbol, one number" and you want a strong password that satisfies it in one click — while watching the strength climb from "cracked instantly" to "cannot be brute-forced" as you raise the length, so you can make the right call instead of reusing something.'
   },
   diceware: {
     what: 'Generates a multi-word passphrase using cryptographically random selection from a wordlist (the Diceware method).',

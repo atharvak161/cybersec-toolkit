@@ -874,3 +874,79 @@ table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
   }
   .sidebar.open { left: 0; }
 }
+
+/* ============================================================
+   Password generator — live strength & crack-time meter
+   ============================================================ */
+.pw-meter {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  /* Per-band accent, defaulting to dim; each band overrides --pw. */
+  --pw: var(--text-dim);
+}
+.pw-band-catastrophic { --pw: #f85149; }
+.pw-band-critical     { --pw: #f0883e; }
+.pw-band-weak         { --pw: #d29922; }
+.pw-band-fair         { --pw: #d4b429; }
+.pw-band-strong       { --pw: #3fb950; }
+.pw-band-very-strong  { --pw: #2ea043; }
+.pw-band-fortress     { --pw: #39d0d8; }
+
+.pw-verdict {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 13px 15px;
+  background: color-mix(in srgb, var(--pw) 10%, transparent);
+  border-left: 3px solid var(--pw);
+}
+.pw-verdict-icon { font-size: 22px; line-height: 1.2; flex-shrink: 0; }
+.pw-verdict-head { font-weight: 600; color: var(--pw); font-size: var(--text-md); }
+.pw-verdict-msg { color: var(--text); font-size: var(--text-sm); margin-top: 3px; line-height: 1.5; }
+
+.pw-bar {
+  height: 8px;
+  background: var(--bg-input);
+  margin: 0;
+  position: relative;
+  overflow: hidden;
+}
+.pw-bar-fill {
+  height: 100%;
+  background: var(--pw);
+  transition: width 220ms ease-out, background-color 220ms ease-out;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--pw) 55%, transparent);
+}
+
+.pw-meter-meta {
+  padding: 8px 15px;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.pw-crack { width: 100%; border-collapse: collapse; }
+.pw-crack caption {
+  text-align: left;
+  padding: 10px 15px 6px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.pw-crack td { padding: 7px 15px; border-top: 1px solid var(--border); vertical-align: top; }
+.pw-tier-icon { width: 26px; font-size: 16px; }
+.pw-tier-name { font-size: var(--text-sm); color: var(--text); }
+.pw-tier-detail { font-size: var(--text-xs); color: var(--text-dim); margin-top: 2px; line-height: 1.45; }
+.pw-tier-time {
+  text-align: right;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+/* The realistic serious-attacker row — the one the verdict is anchored to. */
+.pw-ref-row td { background: color-mix(in srgb, var(--pw) 7%, transparent); }
+.pw-ref-row .pw-tier-time { color: var(--pw); }

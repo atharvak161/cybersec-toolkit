@@ -81,11 +81,35 @@ export function parseIpGeoResponse(json) {
 async function fetchJson(url, fetchImpl = globalThis.fetch) {
   if (!fetchImpl) throw new Error('No fetch implementation available');
   const res = await fetchImpl(url);
-  return res.json();
+  // A malformed query makes dns.google (and other endpoints) reply with an
+  // HTML error page, not JSON — res.json() then throws a raw, useless
+  // "Unexpected token '<' ... not valid JSON" SyntaxError. Translate that
+  // failure mode into a friendly message instead (same treatment lookupWhois
+  // already gives its empty-body 404 case).
+  try {
+    return await res.json();
+  } catch (parseErr) {
+    throw new Error('The lookup service did not return a valid response. Check the domain name and try again.');
+  }
+}
+
+/**
+ * A DNS name for a public resolver: a dotted host label, no scheme, no path,
+ * no spaces. Kept deliberately lenient (RDAP/DoH will reject truly invalid
+ * names themselves) — this only catches the obvious "empty box" / "pasted a
+ * URL" mistakes before they turn into a confusing server error.
+ */
+export function isPlausibleDomain(name) {
+  return typeof name === 'string' && /^(?=.{1,253}$)([a-z0-9_-]+\.)+[a-z0-9-]+$/i.test(name.trim());
 }
 
 export async function lookupDns(name, type = 'A', fetchImpl) {
-  const json = await fetchJson(buildDnsUrl(name, type), fetchImpl);
+  const domain = (name || '').trim();
+  if (!domain) throw new Error('Enter a domain name first.');
+  if (!isPlausibleDomain(domain)) {
+    throw new Error(`"${domain}" doesn't look like a domain name. Enter something like example.com (no http://, no path).`);
+  }
+  const json = await fetchJson(buildDnsUrl(domain, type), fetchImpl);
   return parseDnsResponse(json);
 }
 
