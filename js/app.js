@@ -16,6 +16,7 @@ import { AUTO_DECODE_TOOLS } from './ui/auto-decode-tools.js';
 import { PASSWORD_TOOLS } from './ui/password-tools.js';
 import { FILES_TOOLS } from './ui/files-tools.js';
 import { NETWORK_TOOLS } from './ui/network-tools.js';
+import { EMAIL_TOOLS } from './ui/email-tools.js';
 import { DEV_TOOLS } from './ui/dev-tools.js';
 import { PENTEST_TOOLS } from './ui/pentest-tools.js';
 import { TOOL_COPY } from './data/tool-copy.js';
@@ -67,6 +68,12 @@ const CATEGORIES = [
     intro: 'Look up public information about domains, IPs, and subnets, and reference common ports and protocols. Reach for this for read-only, passive lookups — nothing here actively scans or probes a third-party system.'
   },
   {
+    name: 'Email Authentication',
+    slug: 'email-authentication',
+    tools: EMAIL_TOOLS,
+    intro: "Look up, generate, and troubleshoot the DNS records and headers that determine whether mail from a domain is trusted — SPF, DKIM, DMARC, BIMI, and a combined domain health check, plus a raw email header analyzer that traces the delivery path and authentication verdicts. Reach for this when you're setting up a domain's mail security, chasing down why legitimate mail is landing in spam, or triaging a suspicious message's headers."
+  },
+  {
     name: 'Developer Utilities',
     slug: 'developer-utilities',
     tools: DEV_TOOLS,
@@ -86,7 +93,10 @@ function allCategoriesForLookup() {
 
 const TOTAL_TOOL_COUNT = allCategoriesForLookup().reduce((sum, c) => sum + c.tools.length, 0);
 
-const EXTERNAL_API_TOOL_IDS = new Set(['hibp', 'dns-lookup', 'whois-lookup', 'ip-geo']);
+const EXTERNAL_API_TOOL_IDS = new Set([
+  'hibp', 'dns-lookup', 'whois-lookup', 'ip-geo',
+  'spf-lookup', 'dkim-lookup', 'dmarc-lookup', 'bimi-lookup', 'domain-health'
+]);
 
 const EXPANDED_STORAGE_KEY = 'cybersec-toolkit:nav-expanded';
 
@@ -203,8 +213,8 @@ function firstSentenceOnly(text) {
 function renderHome() {
   swapContent((container) => {
     const eyebrow = el('p', { class: 'section-eyebrow' }, 'CYBERSEC-TOOLKIT · 100% CLIENT-SIDE');
-    const title = el('h1', { class: 'home-title' }, `${TOTAL_TOOL_COUNT} tools, ${CATEGORIES.length} sections, zero servers.`);
-    const meta = el('p', { class: 'dashboard-meta tabular-nums' }, 'Nothing you type is sent anywhere except the 4 tools explicitly marked 🌐 (HIBP breach check, DNS lookup, WHOIS lookup, IP geolocation), each of which shows exactly what it calls before you use it.');
+    const title = el('h1', { class: 'home-title' }, `${TOTAL_TOOL_COUNT} tools, ${allCategoriesForLookup().length} sections, zero servers.`);
+    const meta = el('p', { class: 'dashboard-meta tabular-nums' }, `Nothing you type is sent anywhere except the ${EXTERNAL_API_TOOL_IDS.size} tools explicitly marked 🌐 (HIBP breach check; DNS, WHOIS, and IP geolocation lookups; SPF, DKIM, DMARC, and BIMI lookups; and the combined Domain Health check), each of which shows exactly what it calls before you use it.`);
 
     // One hero card per pinned tool — same dashboard-hero treatment Recipe
     // Chain always had. Recipe Chain keeps its existing "Recipe Builder"

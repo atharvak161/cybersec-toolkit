@@ -5,7 +5,7 @@
 A static, client-side-only cybersecurity utility toolkit. Plain HTML/CSS/JS,
 no build step, no framework, no bundler — open `index.html` (or serve the
 directory) and it runs. Nothing you type is ever sent to a server, except
-four explicitly-disclosed tools that call a public read-only API (each is
+nine explicitly-disclosed tools that call a public read-only API (each is
 marked with a 🌐 badge in the UI and listed below).
 
 ## Purpose & Ethical Use
@@ -26,11 +26,14 @@ It is **not** intended for, and must not be used for:
   hash lookup" tool is a 300-entry **educational demo**, clearly labeled as
   such, not a real cracking tool (no large wordlists are bundled).
 - Actively scanning, enumerating, or probing third-party systems. The
-  OSINT/lookup tools (WHOIS, DNS, IP geolocation, phishing checker) only
-  query public, read-only data sources (a public DNS resolver, the IETF's
-  RDAP registry protocol, a public IP-geolocation API) or run pure
+  OSINT/lookup tools (WHOIS, DNS, IP geolocation, phishing checker, and
+  the SPF/DKIM/DMARC/BIMI/Domain Health email-authentication lookups)
+  only query public, read-only data sources (a public DNS resolver, the
+  IETF's RDAP registry protocol, a public IP-geolocation API) or run pure
   client-side heuristics — none of them perform active scanning or
-  enumeration of a target system.
+  enumeration of a target system. A DKIM or BIMI lookup does require a
+  selector (the tool defaults to the common "default" selector) but is
+  still a single passive DNS TXT read, not enumeration.
 
 The three v3 **Pentest & CTF Reference** tools — Reverse Shell Generator,
 Injection Payload Cheatsheet, and Privilege Escalation Enumeration
@@ -60,20 +63,27 @@ are:
 | DNS Lookup | `dns.google` (Google Public DNS-over-HTTPS JSON API) | The domain name and record type you enter |
 | WHOIS Lookup | `rdap.org` (RDAP — the IETF/IANA-standardized WHOIS successor) | The domain name you enter |
 | IP Geolocation | `ipapi.co` | The IP address you enter |
+| SPF Lookup | `dns.google` (same DoH API as DNS Lookup) | The domain name you enter |
+| DKIM Lookup | `dns.google` (same DoH API as DNS Lookup) | The domain name and selector you enter |
+| DMARC Lookup | `dns.google` (same DoH API as DNS Lookup) | The domain name you enter |
+| BIMI Lookup | `dns.google` (same DoH API as DNS Lookup) | The domain name and selector you enter (also runs a DMARC lookup as a cross-check) |
+| Domain Health Lookup | `dns.google` (same DoH API as DNS Lookup) | The domain name you enter (runs the DMARC, SPF, and BIMI lookups above in one pass) |
 
-All four are free, public, no-API-key-required endpoints — no secret is
+All nine are free, public, no-API-key-required endpoints — no secret is
 baked into the client code (there's nothing to steal), and no user data is
-compiled or logged by this toolkit itself.
+compiled or logged by this toolkit itself. The five email-authentication
+lookups reuse the exact same `dns.google` DNS-over-HTTPS plumbing as DNS
+Lookup — no new external host was introduced to build them.
 
 ## Architecture
 
 - No build step. `index.html` loads `js/app.js` as an ES module; everything
   else is plain ES modules imported from there.
-- **v3 navigation (9 sections):** the sidebar is a pinned Recipe Builder
-  entry point plus 8 collapsible category groups — Encoding & Ciphers,
+- **v4 navigation (10 sections):** the sidebar is a pinned Recipe Builder
+  entry point plus 9 collapsible category groups — Encoding & Ciphers,
   Hashing & Integrity, Cryptography, Passwords & Credential Safety, Files
-  & Metadata, Network & Recon, Developer Utilities, and Pentest & CTF
-  Reference (9 sections total, 48 tools). Each category has its own
+  & Metadata, Network & Recon, Email Authentication, Developer Utilities,
+  and Pentest & CTF Reference (10 sections total, 56 tools). Each category has its own
   section landing page (an intro blurb plus a card grid of its tools),
   collapsible/expandable group state persisted to `localStorage`, and a
   quick-search box (press `/`) that filters across all tools by name. The
@@ -202,6 +212,18 @@ scanner the way a production QR library is.
 | Reverse Shell Generator — *Pentest & CTF Reference* (payload + matching listener, multiple shells/languages) | Working — text generation only, no network call or execution; see [Purpose & Ethical Use](#purpose--ethical-use) |
 | Injection Payload Cheatsheet — *Pentest & CTF Reference* (SQLi, XSS, LFI/RFI, command injection, SSTI patterns) | Working — static reference only |
 | Privilege Escalation Enumeration Checklist — *Pentest & CTF Reference* (Linux/Windows enumeration steps + GTFOBins/LOLBAS links) | Working — static reference only |
+
+### v4 (additive, same app — 7 new tools: Email Authentication, a new 10th section)
+
+| Tool | Status |
+|---|---|
+| SPF Lookup (dns.google, external API, disclosed) | Working — counts DNS-lookup mechanisms against the RFC 7208 limit of 10 and warns if exceeded |
+| DKIM Lookup (dns.google, external API, disclosed) | Working — domain + selector, flags a missing or revoked (empty `p=`) key |
+| DMARC Lookup (dns.google, external API, disclosed) | Working — explains the policy in plain English, warns on `p=none` or no record |
+| BIMI Lookup (dns.google, external API, disclosed) | Working — cross-checks that DMARC is at enforcement (quarantine/reject), which most mailbox providers require to display the logo |
+| DMARC Record Generator | Working — pure, no network call; validates `rua`/`ruf` as `mailto:` URIs, `pct` range, and `fo` syntax before emitting the record |
+| Domain Health Lookup (dns.google, external API, disclosed) | Working — runs the DMARC + SPF + BIMI lookups above for one domain and shows a pass/warn/fail summary; reuses their parsing logic rather than duplicating it |
+| Email Header Analyzer | Working — pure text parsing, no network; orders `Received:` hops into a delivery-path timeline (flagging >5-minute gaps) and surfaces SPF/DKIM/DMARC verdicts from `Authentication-Results`/`Received-SPF`/`DKIM-Signature`/ARC headers. Distinct from the v3 HTTP Security Headers Checker, which analyzes web response headers, not email headers |
 
 ## Running the tests
 

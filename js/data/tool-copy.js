@@ -1,11 +1,13 @@
 /**
  * Tool description copy — "what it does" + "when to use it" for every
- * tool in the toolkit (48 entries: 35 v1/v2 tools + 13 v3 additions).
+ * tool in the toolkit (56 entries, most recently +7 for the v4 Email
+ * Authentication additions below).
  * Source: docs/design/cybersec-toolkit-v3-tool-copy.md (org repo, not
  * shipped with this project) — pasted here verbatim per the v3 design
- * spec's instruction not to rewrite the substance. Keyed by tool id so
- * every tool-*.js UI module can pull its copy from one place instead of
- * duplicating description strings inline.
+ * spec's instruction not to rewrite the substance (v4 additions follow
+ * the same what/when convention). Keyed by tool id so every tool-*.js UI
+ * module can pull its copy from one place instead of duplicating
+ * description strings inline.
  */
 
 export const TOOL_COPY = {
@@ -181,7 +183,37 @@ export const TOOL_COPY = {
     when: "You see port 1433 in an nmap scan or a firewall rule and want an instant reminder that it's MSSQL, without switching tabs to search it."
   },
 
-  // ---------- Section 7: Developer Utilities ----------
+  // ---------- Section 7: Email Authentication ----------
+  'spf-lookup': {
+    what: "Queries a domain's apex TXT records for its SPF policy, parses every mechanism (ip4/ip6/a/mx/include/all and their qualifiers), and counts the DNS-lookup-incurring mechanisms against the RFC 7208 limit of 10.",
+    when: "You're troubleshooting mail delivery, reviewing a domain's outbound-mail authorization before a migration, or checking whether an SPF record is close to (or already over) the 10-lookup limit that causes silent permerrors."
+  },
+  'dkim-lookup': {
+    what: 'Queries the DKIM public-key record for a domain and selector, and flags a missing or revoked key.',
+    when: "You're verifying that a DKIM selector you just published (or a vendor just gave you) actually resolves, or checking whether an old selector has been revoked."
+  },
+  'dmarc-lookup': {
+    what: "Queries a domain's DMARC policy record and explains it in plain English — enforcement level, subdomain policy, alignment modes, and report addresses.",
+    when: "You want to know how strictly a domain enforces SPF/DKIM alignment — for example, checking whether your own domain is still in monitoring-only p=none mode when it should have moved to enforcement."
+  },
+  'bimi-lookup': {
+    what: "Queries a domain's BIMI record for its logo and VMC certificate URLs, and cross-checks whether DMARC is at the enforcement level BIMI requires.",
+    when: "You're setting up brand logos in supporting mail clients and want to confirm the record resolves and DMARC is strict enough for it to actually display."
+  },
+  'dmarc-generator': {
+    what: 'Builds a syntactically correct v=DMARC1 TXT record from a form — policy, subdomain policy, report addresses, percentage, and alignment modes — with input validation.',
+    when: "You're rolling out DMARC for a domain and want a correctly-formatted record to publish, without hand-assembling the tag=value; syntax and risking a typo."
+  },
+  'domain-health': {
+    what: 'Runs the DMARC, SPF, and BIMI lookups for one domain in a single pass and shows a compact pass/warn/fail health summary.',
+    when: "You want a fast first-pass read on a domain's email-authentication posture — say, while triaging a phishing report or auditing a vendor's domain — without running three separate lookups."
+  },
+  'header-analyzer': {
+    what: 'Parses a pasted raw email header block, orders the Received: hops into a delivery-path timeline (flagging unusual gaps), and surfaces the SPF/DKIM/DMARC verdicts from Authentication-Results and related headers.',
+    when: "You've got a suspicious email and want to trace exactly which servers handled it and whether it actually passed SPF/DKIM/DMARC, without manually reading a wall of Received: headers top to bottom."
+  },
+
+  // ---------- Section 8: Developer Utilities ----------
   'regex-tester': {
     what: 'Tests a regular expression against sample text live, with a library of common patterns to start from.',
     when: "You're writing a validation regex and want to confirm it matches — and doesn't over-match — real examples before it goes into production code."
@@ -211,7 +243,7 @@ export const TOOL_COPY = {
     when: "You've got a link from an unsolicited email or text and want a quick second opinion on how suspicious it looks before deciding whether to click it."
   },
 
-  // ---------- Section 8: Pentest & CTF Reference ----------
+  // ---------- Section 9: Pentest & CTF Reference ----------
   'reverse-shell': {
     what: 'Generates a reverse shell one-liner for your chosen shell or language — bash, nc, python, perl, php, ruby, powershell, socat, and others — paired with the matching listener command.',
     when: "You've got authorized access to a box in a CTF or a pentest engagement and need the right one-liner and listener syntax for whatever shell is actually available on the target, without hunting through five browser tabs."

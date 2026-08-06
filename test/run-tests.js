@@ -49,6 +49,18 @@ import { searchPorts } from '../js/lib/ports-reference.js';
 import { generateReverseShell, SHELL_TYPES } from '../js/lib/reverse-shell.js';
 import { aesEncryptBytes, aesDecryptBytes } from '../js/lib/aes.js';
 import { autoDecode, DECODER_NAMES, MAX_INPUT_LENGTH } from '../js/lib/auto-decode.js';
+import {
+  normalizeTxtValue, parseSpf, findSpfRecords, lookupSpf, SPF_LOOKUP_LIMIT,
+  parseDkim, lookupDkim,
+  parseDmarc, lookupDmarc, explainDmarcPolicy, generateDmarc,
+  parseBimi, lookupBimi,
+  computeOverallHealth, lookupDomainHealth
+} from '../js/lib/email-auth.js';
+import {
+  parseEmailHeaders, getHeaders, parseReceivedHeader, analyzeReceivedChain,
+  parseAuthenticationResults, parseReceivedSpf, parseDkimSignatureHeader,
+  analyzeAuthentication, analyzeEmailHeaders
+} from '../js/lib/email-headers.js';
 
 // ============================================================
 // Encoding
@@ -1629,4 +1641,396 @@ test('auto-decode: size guard is overridable via options (for callers/tests that
   const r = autoDecode('a'.repeat(100), { maxInputLength: 50 });
   assert.equal(r.stats.sizeCapped, true);
   assert.equal(r.stats.maxInputLength, 50);
+});
+
+// ============================================================
+// Email authentication — SPF / DKIM / DMARC / BIMI
+// (pure parsers + DMARC generator; lookups tested via a fake fetch,
+// no real network — same pattern as the net-lookups lookupWhois tests)
+// ============================================================
+
+test('email-auth: normalizeTxtValue strips dns.google quoting and joins split TXT strings', () => {
+  assert.equal(normalizeTxtValue('"v=spf1 ~all"'), 'v=spf1 ~all');
+  assert.equal(normalizeTxtValue('"v=spf1 " "include:_spf.example.com " "~all"'), 'v=spf1 include:_spf.example.com ~all');
+  assert.equal(normalizeTxtValue('v=spf1 ~all'), 'v=spf1 ~all'); // unquoted passthrough
+  assert.equal(normalizeTxtValue(42), '');
+});
+
+test('email-auth: parseSpf parses mechanisms, qualifiers, and the "all" policy', () => {
+  const r = parseSpf('v=spf1 ip4:192.0.2.0/24 include:_spf.google.com a mx ~all');
+  assert.equal(r.all, '~');
+  assert.equal(r.mechanisms.length, 5);
+  assert.deepEqual(r.mechanisms[0], { qualifier: '+', type: 'ip4', value: '192.0.2.0/24' });
+  assert.deepEqual(r.mechanisms[1], { qualifier: '+', type: 'include', value: '_spf.google.com' });
+  assert.deepEqual(r.mechanisms[2], { qualifier: '+', type: 'a', value: null });
+  assert.deepEqual(r.mechanisms[3], { qualifier: '+', type: 'mx', value: null });
+  assert.deepEqual(r.mechanisms[4], { qualifier: '~', type: 'all', value: null });
+  assert.equal(r.lookupCount, 3); // include + a + mx
+  assert.equal(r.lookupLimitExceeded, false);
+  assert.equal(r.warnings.length, 0);
+});
+
+test('email-auth: parseSpf accepts a quoted dns.google-style record', () => {
+  const r = parseSpf('"v=spf1 -all"');
+  assert.equal(r.all, '-');
+  assert.equal(r.mechanisms.length, 1);
+});
+
+test('email-auth: parseSpf flags exceeding the RFC 7208 10-lookup limit', () => {
+  const includes = Array.from({ length: SPF_LOOKUP_LIMIT + 1 }, (_, i) => `include:s${i}.example.com`).join(' ');
+  const r = parseSpf(`v=spf1 ${includes} ~all`);
+  assert.equal(r.lookupCount, SPF_LOOKUP_LIMIT + 1);
+  assert.equal(r.lookupLimitExceeded, true);
+  assert.ok(r.warnings.some((w) => /exceeding the RFC 7208 limit/.test(w)));
+});
+
+test('email-auth: parseSpf warns when there is no "all" mechanism or redirect', () => {
+  const r = parseSpf('v=spf1 include:_spf.example.com');
+  assert.equal(r.all, null);
+  assert.ok(r.warnings.some((w) => /catch-all/.test(w)));
+});
+
+test('email-auth: parseSpf understands redirect= as a lookup-consuming modifier and suppresses the no-catch-all warning', () => {
+  const r = parseSpf('v=spf1 redirect=_spf.example.com');
+  assert.equal(r.redirect, '_spf.example.com');
+  assert.equal(r.lookupCount, 1);
+  assert.ok(!r.warnings.some((w) => /catch-all/.test(w)));
+});
+
+test('email-auth: parseSpf rejects a non-SPF record', () => {
+  assert.throws(() => parseSpf('v=DKIM1; k=rsa; p=abc'), /Not a valid SPF record/);
+});
+
+test('email-auth: findSpfRecords filters a mixed TXT answer set to just the SPF record(s)', () => {
+  const found = findSpfRecords(['"google-site-verification=abc123"', '"v=spf1 -all"']);
+  assert.deepEqual(found, ['v=spf1 -all']);
+});
+
+test('email-auth: lookupSpf finds and parses the SPF record among unrelated TXT records', async () => {
+  const fakeFetch = async () => ({
+    json: async () => ({
+      Status: 0,
+      Answer: [
+        { name: 'example.com.', type: 16, TTL: 300, data: '"google-site-verification=abc123"' },
+        { name: 'example.com.', type: 16, TTL: 300, data: '"v=spf1 include:_spf.google.com ~all"' }
+      ]
+    })
+  });
+  const r = await lookupSpf('example.com', fakeFetch);
+  assert.equal(r.domain, 'example.com');
+  assert.equal(r.all, '~');
+  assert.equal(r.multipleRecords, false);
+});
+
+test('email-auth: lookupSpf throws a friendly error when no SPF record exists', async () => {
+  const fakeFetch = async () => ({ json: async () => ({ Status: 0, Answer: [] }) });
+  await assert.rejects(() => lookupSpf('no-spf.example.com', fakeFetch), /No SPF record found/);
+});
+
+test('email-auth: parseDkim reports key type, presence, and revocation', () => {
+  const ok = parseDkim('v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC1234');
+  assert.equal(ok.keyType, 'rsa');
+  assert.equal(ok.publicKeyPresent, true);
+  assert.equal(ok.revoked, false);
+  assert.equal(ok.missingKey, false);
+
+  const revoked = parseDkim('v=DKIM1; k=rsa; p=');
+  assert.equal(revoked.revoked, true);
+  assert.equal(revoked.publicKeyPresent, false);
+  assert.ok(revoked.warnings.some((w) => /REVOKED/.test(w)));
+
+  const missing = parseDkim('v=DKIM1; k=rsa');
+  assert.equal(missing.missingKey, true);
+  assert.ok(missing.warnings.some((w) => /No p=/.test(w)));
+});
+
+test('email-auth: parseDkim rejects an unsupported version tag', () => {
+  assert.throws(() => parseDkim('v=DKIM2; k=rsa; p=abc'), /Unsupported DKIM record version/);
+});
+
+test('email-auth: lookupDkim queries <selector>._domainkey.<domain> and defaults the selector to "default"', async () => {
+  let requestedUrl;
+  const fakeFetch = async (url) => {
+    requestedUrl = url;
+    return { json: async () => ({ Status: 0, Answer: [{ name: 'default._domainkey.example.com.', type: 16, TTL: 300, data: '"v=DKIM1; k=rsa; p=ABC123"' }] }) };
+  };
+  const r = await lookupDkim('example.com', undefined, fakeFetch);
+  assert.match(requestedUrl, /name=default\._domainkey\.example\.com/);
+  assert.equal(r.selector, 'default');
+  assert.equal(r.publicKeyPresent, true);
+});
+
+test('email-auth: lookupDkim throws a friendly error when the selector has no record', async () => {
+  const fakeFetch = async () => ({ json: async () => ({ Status: 3, Answer: [] }) });
+  await assert.rejects(() => lookupDkim('example.com', 'ghost', fakeFetch), /No DKIM record found/);
+});
+
+test('email-auth: parseDmarc parses every standard tag and explains the policy in plain English', () => {
+  const r = parseDmarc('v=DMARC1; p=reject; sp=quarantine; rua=mailto:agg@example.com,mailto:agg2@example.com; ruf=mailto:forensic@example.com; pct=100; adkim=s; aspf=r; fo=1');
+  assert.equal(r.policy, 'reject');
+  assert.equal(r.subdomainPolicy, 'quarantine');
+  assert.deepEqual(r.rua, ['mailto:agg@example.com', 'mailto:agg2@example.com']);
+  assert.deepEqual(r.ruf, ['mailto:forensic@example.com']);
+  assert.equal(r.pct, 100);
+  assert.equal(r.adkim, 's');
+  assert.equal(r.aspf, 'r');
+  assert.equal(r.fo, '1');
+  assert.equal(explainDmarcPolicy('reject'), r.policyExplanation);
+  assert.equal(r.warnings.length, 0);
+});
+
+test('email-auth: parseDmarc defaults subdomain policy to p, and warns on p=none / missing rua / pct<100', () => {
+  const r = parseDmarc('v=DMARC1; p=none; pct=50');
+  assert.equal(r.subdomainPolicy, 'none');
+  assert.equal(r.pct, 50);
+  assert.ok(r.warnings.some((w) => /monitoring-only/.test(w)));
+  assert.ok(r.warnings.some((w) => /50%/.test(w)));
+  assert.ok(r.warnings.some((w) => /No rua=/.test(w)));
+});
+
+test('email-auth: parseDmarc rejects a record with no valid p= tag', () => {
+  assert.throws(() => parseDmarc('v=DMARC1; sp=reject'), /missing a valid required "p=" policy tag/);
+  assert.throws(() => parseDmarc('v=spf1 -all'), /Not a valid DMARC record/);
+});
+
+test('email-auth: lookupDmarc queries _dmarc.<domain>', async () => {
+  let requestedUrl;
+  const fakeFetch = async (url) => {
+    requestedUrl = url;
+    return { json: async () => ({ Status: 0, Answer: [{ name: '_dmarc.example.com.', type: 16, TTL: 300, data: '"v=DMARC1; p=reject; rua=mailto:agg@example.com"' }] }) };
+  };
+  const r = await lookupDmarc('example.com', fakeFetch);
+  assert.match(requestedUrl, /name=_dmarc\.example\.com/);
+  assert.equal(r.policy, 'reject');
+});
+
+test('email-auth: lookupDmarc throws a friendly error when no DMARC record is published', async () => {
+  const fakeFetch = async () => ({ json: async () => ({ Status: 3, Answer: [] }) });
+  await assert.rejects(() => lookupDmarc('no-dmarc.example.com', fakeFetch), /no DMARC policy published/);
+});
+
+test('email-auth: generateDmarc emits a minimal syntactically correct record for the defaults', () => {
+  assert.equal(generateDmarc({}), 'v=DMARC1; p=none');
+});
+
+test('email-auth: generateDmarc emits every non-default tag in order', () => {
+  const record = generateDmarc({
+    policy: 'reject', subdomainPolicy: 'quarantine',
+    rua: 'mailto:agg@example.com', ruf: 'mailto:forensic@example.com',
+    pct: 50, adkim: 's', aspf: 's', fo: '1:d'
+  });
+  assert.equal(record, 'v=DMARC1; p=reject; sp=quarantine; rua=mailto:agg@example.com; ruf=mailto:forensic@example.com; pct=50; adkim=s; aspf=s; fo=1:d');
+});
+
+test('email-auth: generateDmarc validates policy, mailto addresses, pct range, and fo syntax', () => {
+  assert.throws(() => generateDmarc({ policy: 'bogus' }), /Policy \(p\) must be one of/);
+  assert.throws(() => generateDmarc({ rua: 'agg@example.com' }), /must be a mailto: URI/);
+  assert.throws(() => generateDmarc({ pct: 150 }), /whole number between 0 and 100/);
+  assert.throws(() => generateDmarc({ pct: -1 }), /whole number between 0 and 100/);
+  assert.throws(() => generateDmarc({ fo: 'x' }), /Failure options/);
+  try {
+    generateDmarc({ policy: 'bogus', rua: 'nope' });
+    assert.fail('should have thrown');
+  } catch (err) {
+    assert.equal(err.validationErrors.length, 2);
+  }
+});
+
+test('email-auth: parseBimi extracts the logo and VMC URLs', () => {
+  const r = parseBimi('v=BIMI1; l=https://example.com/logo.svg; a=https://example.com/vmc.pem');
+  assert.equal(r.logoUrl, 'https://example.com/logo.svg');
+  assert.equal(r.vmcUrl, 'https://example.com/vmc.pem');
+
+  const noVmc = parseBimi('v=BIMI1; l=https://example.com/logo.svg;');
+  assert.equal(noVmc.logoUrl, 'https://example.com/logo.svg');
+  assert.equal(noVmc.vmcUrl, null);
+
+  assert.throws(() => parseBimi('v=spf1 -all'), /Not a valid BIMI record/);
+});
+
+test('email-auth: lookupBimi queries <selector>._bimi.<domain>, defaulting the selector to "default"', async () => {
+  let requestedUrl;
+  const fakeFetch = async (url) => {
+    requestedUrl = url;
+    return { json: async () => ({ Status: 0, Answer: [{ name: 'default._bimi.example.com.', type: 16, TTL: 300, data: '"v=BIMI1; l=https://example.com/logo.svg"' }] }) };
+  };
+  const r = await lookupBimi('example.com', undefined, fakeFetch);
+  assert.match(requestedUrl, /name=default\._bimi\.example\.com/);
+  assert.equal(r.logoUrl, 'https://example.com/logo.svg');
+});
+
+test('email-auth: lookupBimi throws a friendly error when no BIMI record exists', async () => {
+  const fakeFetch = async () => ({ json: async () => ({ Status: 3, Answer: [] }) });
+  await assert.rejects(() => lookupBimi('example.com', 'default', fakeFetch), /No BIMI record found/);
+});
+
+test('email-auth: computeOverallHealth scores a fully-enforced, BIMI-eligible domain as pass', () => {
+  const health = computeOverallHealth({
+    dmarc: { ok: true, data: { policy: 'reject' } },
+    spf: { ok: true, data: { all: '-', redirect: null, lookupLimitExceeded: false } },
+    bimi: { ok: true, data: {} }
+  });
+  assert.equal(health.score, 'pass');
+  assert.equal(health.issues.length, 0);
+});
+
+test('email-auth: computeOverallHealth fails a domain with no DMARC or SPF at all', () => {
+  const health = computeOverallHealth({
+    dmarc: { ok: false, error: 'No DMARC record found at _dmarc.example.com.' },
+    spf: { ok: false, error: 'No SPF record found at the apex of example.com.' },
+    bimi: { ok: false, error: 'No BIMI record found.' }
+  });
+  assert.equal(health.score, 'fail');
+  assert.equal(health.issues.length, 2);
+});
+
+test('email-auth: computeOverallHealth warns (not fails) on p=none and flags BIMI without DMARC enforcement', () => {
+  const health = computeOverallHealth({
+    dmarc: { ok: true, data: { policy: 'none' } },
+    spf: { ok: true, data: { all: '~', redirect: null, lookupLimitExceeded: false } },
+    bimi: { ok: true, data: {} }
+  });
+  assert.equal(health.score, 'warn');
+  assert.ok(health.issues.some((i) => /monitoring only/.test(i)));
+  assert.ok(health.issues.some((i) => /BIMI is published/.test(i)));
+});
+
+test('email-auth: lookupDomainHealth combines DMARC + SPF + BIMI without duplicating parsing logic', async () => {
+  const fakeFetch = async (url) => {
+    if (url.includes('_dmarc.')) {
+      return { json: async () => ({ Status: 0, Answer: [{ name: '_dmarc.example.com.', type: 16, TTL: 300, data: '"v=DMARC1; p=reject"' }] }) };
+    }
+    if (url.includes('_bimi.')) {
+      return { json: async () => ({ Status: 3, Answer: [] }) };
+    }
+    return { json: async () => ({ Status: 0, Answer: [{ name: 'example.com.', type: 16, TTL: 300, data: '"v=spf1 -all"' }] }) };
+  };
+  const health = await lookupDomainHealth('example.com', fakeFetch);
+  assert.equal(health.domain, 'example.com');
+  assert.equal(health.dmarc.ok, true);
+  assert.equal(health.dmarc.data.policy, 'reject');
+  assert.equal(health.spf.ok, true);
+  assert.equal(health.bimi.ok, false);
+  assert.equal(health.overall.score, 'pass');
+});
+
+// ============================================================
+// Email header analyzer (Received: chain tracing + auth verdicts)
+// ============================================================
+
+const SAMPLE_EMAIL_HEADERS = [
+  'Delivered-To: user@example.com',
+  'Received: by 2002:abc:def0::1 with SMTP id r10csp1 for <user@example.com>; Wed, 30 Jul 2026 10:20:00 -0700 (PDT)',
+  'Received: from mail-relay2.example.net (mail-relay2.example.net [203.0.113.5])',
+  '        by mx.google.com with ESMTPS id def123',
+  '        for <user@example.com>; Wed, 30 Jul 2026 10:15:00 -0700 (PDT)',
+  'Received: from smtp.sender.com (smtp.sender.com [198.51.100.10])',
+  '        by mail-relay2.example.net with ESMTP id ghi456',
+  '        for <user@example.com>; Wed, 30 Jul 2026 09:50:00 -0700 (PDT)',
+  'Authentication-Results: mx.google.com;',
+  '       dkim=pass header.i=@sender.com header.s=selector1;',
+  '       spf=pass (google.com: domain of bounce@sender.com designates 198.51.100.10 as permitted sender) smtp.mailfrom=bounce@sender.com;',
+  '       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=sender.com',
+  'DKIM-Signature: v=1; a=rsa-sha256; d=sender.com; s=selector1; c=relaxed/relaxed;',
+  '        h=from:to:subject; bh=abc123; b=xyz789',
+  'From: Sender Name <sender@sender.com>',
+  'To: user@example.com',
+  'Subject: Test message',
+  'Date: Wed, 30 Jul 2026 09:50:00 -0700',
+  'Message-ID: <abc123@sender.com>',
+  '',
+  'This is the message body, which must be ignored by the parser.'
+].join('\r\n');
+
+test('email-headers: parseEmailHeaders handles folded continuation lines and stops at the blank line before the body', () => {
+  const headers = parseEmailHeaders(SAMPLE_EMAIL_HEADERS);
+  assert.equal(getHeaders(headers, 'Received').length, 3);
+  const ar = getHeaders(headers, 'Authentication-Results');
+  assert.equal(ar.length, 1);
+  assert.match(ar[0].value, /dkim=pass/);
+  assert.match(ar[0].value, /dmarc=pass/);
+  assert.equal(getHeaders(headers, 'Subject')[0].value, 'Test message');
+  assert.ok(!headers.some((h) => /message body/.test(h.value)), 'body content must not leak into headers');
+});
+
+test('email-headers: parseEmailHeaders throws on empty input and on a block with no valid header lines', () => {
+  assert.throws(() => parseEmailHeaders(''), /Paste a raw email header block/);
+  assert.throws(() => parseEmailHeaders('just plain text, no colons anywhere'), /No headers recognized/);
+});
+
+test('email-headers: parseReceivedHeader extracts from/by/with/for/date', () => {
+  const r = parseReceivedHeader('from smtp.sender.com (smtp.sender.com [198.51.100.10]) by mail-relay2.example.net with ESMTP id ghi456 for <user@example.com>; Wed, 30 Jul 2026 09:50:00 -0700 (PDT)');
+  assert.equal(r.from, 'smtp.sender.com');
+  assert.equal(r.by, 'mail-relay2.example.net');
+  assert.equal(r.protocol, 'ESMTP');
+  assert.equal(r.for, 'user@example.com');
+  assert.ok(r.date instanceof Date);
+  assert.equal(r.date.getUTCFullYear(), 2026);
+});
+
+test('email-headers: analyzeReceivedChain reverses newest-first raw order into a chronological sender->recipient path and flags the >5min gap', () => {
+  const headers = parseEmailHeaders(SAMPLE_EMAIL_HEADERS);
+  const chain = analyzeReceivedChain(headers);
+  assert.equal(chain.hopCount, 3);
+  // hop 1 must be the ORIGINAL sender-side relay (oldest timestamp, last in raw text)
+  assert.equal(chain.hops[0].from, 'smtp.sender.com');
+  assert.equal(chain.hops[1].from, 'mail-relay2.example.net');
+  assert.equal(chain.hops[2].from, null); // hop 3 ("Received: by … with SMTP …") has no "from" clause — internal delivery
+  // 09:50 -> 10:15 is a 25-minute gap; 10:15 -> 10:20 is exactly 5 minutes (not flagged)
+  assert.equal(chain.gaps.length, 1);
+  assert.equal(chain.gaps[0].afterHop, 1);
+  assert.equal(chain.gaps[0].beforeHop, 2);
+  assert.equal(chain.gaps[0].deltaMs, 25 * 60 * 1000);
+});
+
+test('email-headers: parseAuthenticationResults extracts spf/dkim/dmarc verdicts and the authenticating server id', () => {
+  const r = parseAuthenticationResults('mx.google.com; dkim=pass header.i=@sender.com; spf=pass smtp.mailfrom=bounce@sender.com; dmarc=pass (p=REJECT) header.from=sender.com');
+  assert.equal(r.authservid, 'mx.google.com');
+  assert.deepEqual(r.results.spf, ['pass']);
+  assert.deepEqual(r.results.dkim, ['pass']);
+  assert.deepEqual(r.results.dmarc, ['pass']);
+});
+
+test('email-headers: parseReceivedSpf extracts the leading result word', () => {
+  assert.equal(parseReceivedSpf('pass (google.com: domain designates 1.2.3.4 as permitted sender) client-ip=1.2.3.4').result, 'pass');
+  assert.equal(parseReceivedSpf('softfail (…)').result, 'softfail');
+});
+
+test('email-headers: parseDkimSignatureHeader extracts d=/s=/a= without attempting verification', () => {
+  const r = parseDkimSignatureHeader('v=1; a=rsa-sha256; d=sender.com; s=selector1; c=relaxed/relaxed; h=from:to:subject; bh=abc123; b=xyz789');
+  assert.equal(r.domain, 'sender.com');
+  assert.equal(r.selector, 'selector1');
+  assert.equal(r.algorithm, 'rsa-sha256');
+});
+
+test('email-headers: analyzeAuthentication merges Authentication-Results into a single spf/dkim/dmarc verdict set', () => {
+  const headers = parseEmailHeaders(SAMPLE_EMAIL_HEADERS);
+  const auth = analyzeAuthentication(headers);
+  assert.equal(auth.verdicts.spf, 'pass');
+  assert.equal(auth.verdicts.dkim, 'pass');
+  assert.equal(auth.verdicts.dmarc, 'pass');
+  assert.equal(auth.dkimSignatures.length, 1);
+  assert.equal(auth.dkimSignatures[0].domain, 'sender.com');
+  assert.equal(auth.arcChainPresent, false);
+});
+
+test('email-headers: analyzeAuthentication falls back to Received-SPF when there is no Authentication-Results header', () => {
+  const raw = [
+    'Received-SPF: fail (mx.example.com: domain does not designate 5.6.7.8 as permitted sender) client-ip=5.6.7.8',
+    'From: spoofed@sender.com',
+    'To: user@example.com',
+    'Subject: test'
+  ].join('\r\n');
+  const headers = parseEmailHeaders(raw);
+  const auth = analyzeAuthentication(headers);
+  assert.equal(auth.verdicts.spf, 'fail');
+  assert.equal(auth.verdicts.dkim, null);
+});
+
+test('email-headers: analyzeEmailHeaders ties basics + received chain + authentication together', () => {
+  const result = analyzeEmailHeaders(SAMPLE_EMAIL_HEADERS);
+  assert.equal(result.basics.from, 'Sender Name <sender@sender.com>');
+  assert.equal(result.basics.subject, 'Test message');
+  assert.equal(result.receivedChain.hopCount, 3);
+  assert.equal(result.authentication.verdicts.dmarc, 'pass');
 });
