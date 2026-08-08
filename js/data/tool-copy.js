@@ -90,6 +90,10 @@ export const TOOL_COPY = {
     what: 'Computes an HMAC (SHA-1/256/384/512) over a message using a key you supply.',
     when: "You're verifying a webhook signature or testing an API integration that signs requests with HMAC and need to confirm your implementation produces the expected value."
   },
+  'hash-cracker': {
+    what: 'Recovers the plaintext behind MD5, SHA-1, SHA-256, and SHA-512 hashes with a real, in-browser dictionary + rules attack. Paste one hash or a whole list.',
+    when: "You've pulled an unsalted hash from a CTF, a leaked table, or a config and want the password behind it — the common ones fall in seconds, entirely offline."
+  },
   'hash-identifier': {
     what: "Looks at a hash's length and character set and suggests which algorithm(s) it's likely to be.",
     when: 'You find a bare hex string in a leaked file or a config and need a starting guess for what produced it — treat the result as a lead, not proof, since several algorithms share output lengths.'

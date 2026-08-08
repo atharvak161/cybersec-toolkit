@@ -1,7 +1,60 @@
 import * as hashing from '../lib/hashing.js';
+import { crackHashes, detectHashType } from '../lib/hash-cracker.js';
 import { el, toolHeader, clear, resultLine, showError, copyButton } from './helpers.js';
 
 export const HASHING_TOOLS = [
+  {
+    id: 'hash-cracker',
+    name: 'Hash Cracker',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader('Recovers the plaintext behind MD5, SHA-1, SHA-256, and SHA-512 hashes with a real dictionary + rules attack, entirely in your browser. Paste one hash or many (one per line). It catches common and weak passwords — it can’t replicate a service like CrackStation’s multi-hundred-GB server table, and salted or bcrypt/argon2 hashes are out of reach by design.'));
+
+      const input = el('textarea', { rows: '4', placeholder: 'Paste one or more hashes, one per line\ne.g. 5f4dcc3b5aa765d61d8327deb882cf99', style: 'width:100%; font-family:var(--mono, monospace)', spellcheck: 'false' });
+      const runBtn = el('button', { class: 'btn' }, 'Crack');
+      const status = el('div', { class: 'tool-desc', style: 'margin-top:6px' });
+      const resultsBox = el('div', {});
+      const errorNode = el('div', {});
+
+      runBtn.addEventListener('click', async () => {
+        clear(errorNode); clear(resultsBox); clear(status);
+        const hashes = input.value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+        if (!hashes.length) { showError(errorNode, new Error('Paste at least one hash.')); return; }
+        const det = detectHashType(hashes[0]);
+        status.textContent = det ? `Detected ${det.name}. Cracking against the wordlist + rules…` : 'Cracking…';
+        runBtn.disabled = true;
+        try {
+          const out = await crackHashes(hashes, {
+            onProgress: (done) => { status.textContent = `Trying candidates… ${done.toLocaleString()} hashed`; }
+          });
+          const cracked = out.results.filter((r) => r.plaintext !== null).length;
+          status.textContent = `${out.type} · ${cracked} of ${out.results.length} cracked · ${out.tried.toLocaleString()} candidates tried`;
+          const rows = out.results.map((r) => el('tr', { class: r.plaintext !== null ? 'hc-hit' : 'hc-miss' }, [
+            el('td', { class: 'hc-hash tabular-nums' }, r.hash),
+            el('td', { class: 'hc-plain' }, r.plaintext !== null ? r.plaintext : 'not found in wordlist + rules')
+          ]));
+          resultsBox.appendChild(el('table', { class: 'data-table hc-table' }, [
+            el('tr', {}, [el('th', {}, 'Hash'), el('th', {}, 'Plaintext')]),
+            ...rows
+          ]));
+          resultsBox.appendChild(el('div', { class: 'hc-note' }, 'Not cracked doesn’t mean uncrackable — it means the plaintext isn’t in this bundled wordlist or its common variations. A longer or random password, or a salted/bcrypt/argon2 hash, won’t appear here by design.'));
+        } catch (err) {
+          showError(errorNode, err);
+        } finally {
+          runBtn.disabled = false;
+        }
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [
+        el('label', {}, 'Hash(es)'),
+        input,
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn]),
+        status,
+        errorNode
+      ]));
+      container.appendChild(resultsBox);
+    }
+  },
   {
     id: 'hash-generator',
     name: 'Hash Generator',

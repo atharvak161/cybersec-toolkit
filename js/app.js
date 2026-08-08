@@ -23,6 +23,41 @@ import { PENTEST_TOOLS } from './ui/pentest-tools.js';
 import { TOOL_COPY } from './data/tool-copy.js';
 import { openCommandPalette } from './ui/command-palette.js';
 import { attachTooltip } from './ui/tooltip.js';
+import { autoDecode } from './lib/auto-decode.js';
+
+// ---------- Usage + favorites (localStorage) — powers the home "Recently
+// used" and "Pinned" rails, so the launchpad learns what you actually reach
+// for. Degrades silently when storage is unavailable. ----------
+const USAGE_KEY = 'cybersec-toolkit:usage';
+const FAV_KEY = 'cybersec-toolkit:favorites';
+
+function loadJson(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; }
+}
+function saveJson(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode — ignore */ }
+}
+let usage = loadJson(USAGE_KEY, {});
+let favorites = loadJson(FAV_KEY, []);
+
+function recordToolUse(toolId) {
+  const now = Date.now();
+  const rec = usage[toolId] || { count: 0, last: 0 };
+  usage[toolId] = { count: rec.count + 1, last: now };
+  saveJson(USAGE_KEY, usage);
+}
+function isFavorite(toolId) { return favorites.includes(toolId); }
+function toggleFavorite(toolId) {
+  favorites = isFavorite(toolId) ? favorites.filter((id) => id !== toolId) : [toolId, ...favorites];
+  saveJson(FAV_KEY, favorites);
+}
+function recentToolIds(limit) {
+  return Object.entries(usage)
+    .filter(([id]) => !!findToolWithCategory(id))
+    .sort((a, b) => b[1].last - a[1].last)
+    .slice(0, limit)
+    .map(([id]) => id);
+}
 
 // ---------- 1. Information architecture (design spec §1) ----------
 // Recipe Chain and Auto-Decode are both pinned above the category system
@@ -187,7 +222,7 @@ function swapContent(populate) {
 }
 
 // ---------- Breadcrumb (design spec §2C) ----------
-function setBreadcrumb({ sectionName, sectionSlug, toolName } = {}) {
+function setBreadcrumb({ sectionName, sectionSlug, toolName, toolId } = {}) {
   clear(breadcrumbEl);
   if (sectionName && toolName) {
     const link = el('button', { class: 'breadcrumb-section link' }, sectionName);
@@ -200,6 +235,18 @@ function setBreadcrumb({ sectionName, sectionSlug, toolName } = {}) {
   } else {
     breadcrumbEl.appendChild(el('span', { class: 'breadcrumb-tool' }, toolName || 'Welcome'));
   }
+  // Favorite (pin) toggle — appears on any real tool view, drives the home
+  // "Pinned" rail.
+  if (toolId) {
+    const star = el('button', { class: 'fav-star' + (isFavorite(toolId) ? ' on' : ''), title: isFavorite(toolId) ? 'Unpin from home' : 'Pin to home' }, isFavorite(toolId) ? '★' : '☆');
+    star.addEventListener('click', () => {
+      toggleFavorite(toolId);
+      star.classList.toggle('on', isFavorite(toolId));
+      star.textContent = isFavorite(toolId) ? '★' : '☆';
+      star.title = isFavorite(toolId) ? 'Unpin from home' : 'Pin to home';
+    });
+    breadcrumbEl.appendChild(star);
+  }
 }
 
 // Truncates a copy sentence to just its first sentence (design spec §1 pt 4:
@@ -211,46 +258,121 @@ function firstSentenceOnly(text) {
 }
 
 // ---------- Rendering: home / tool / section landing ----------
+// Category accent hues — the taxonomy encoded as colour so the map is
+// learnable at a glance (structure is information, not decoration).
+const CATEGORY_HUE = {
+  'encoding-ciphers': '#46E0D4',
+  'hashing-integrity': '#6BB8FF',
+  'cryptography': '#A98BFF',
+  'passwords-credential-safety': '#5FE3A1',
+  'files-metadata': '#F0B152',
+  'network-recon': '#5AA9FF',
+  'email-authentication': '#FF9F6B',
+  'developer-utilities': '#9AA7B8',
+  'pentest-ctf-reference': '#FF6B7D'
+};
+function hueFor(slug) { return CATEGORY_HUE[slug] || 'var(--accent)'; }
+
+function renderMagicResults(box, value) {
+  clear(box);
+  const text = value.trim();
+  if (!text) return;
+  let result;
+  try { result = autoDecode(text); } catch (err) { box.appendChild(el('p', { class: 'magic-empty' }, err.message)); return; }
+  const candidates = (result.candidates || []).filter((c) => c.output && c.output !== text);
+  if (!candidates.length) {
+    box.appendChild(el('p', { class: 'magic-empty' }, 'No confident decoding found. If this is modern crypto (AES/RSA) or a one-time pad, it can’t be brute-forced — you’ll need the key.'));
+    return;
+  }
+  const pct = (s) => Math.max(0, Math.min(100, Math.round(s * 100)));
+  const top = candidates[0];
+  box.appendChild(el('div', { class: 'magic-best' }, [
+    el('div', { class: 'magic-best-tag' }, `Best guess · ${pct(top.score)}% · ${(top.path || []).join(' → ') || 'plaintext'}`),
+    el('div', { class: 'magic-best-out' }, top.output),
+    el('button', { class: 'magic-copy', onclick: () => navigator.clipboard && navigator.clipboard.writeText(top.output) }, 'Copy')
+  ]));
+  if (candidates.length > 1) {
+    const rows = candidates.slice(1, 6).map((c) => el('div', { class: 'magic-row' }, [
+      el('span', { class: 'magic-row-path' }, (c.path || []).join(' → ')),
+      el('span', { class: 'magic-row-out' }, c.output.length > 60 ? c.output.slice(0, 60) + '…' : c.output),
+      el('span', { class: 'magic-row-pct tabular-nums' }, `${pct(c.score)}%`)
+    ]));
+    box.appendChild(el('div', { class: 'magic-more' }, [el('div', { class: 'magic-more-h' }, 'Other candidates'), ...rows]));
+  }
+}
+
+function toolRailCard(toolId) {
+  const found = findToolWithCategory(toolId);
+  if (!found) return null;
+  const { tool, category } = found;
+  const card = el('button', { class: 'rail-card', style: `--hue:${hueFor(category.slug)}` }, [
+    el('span', { class: 'rail-card-name' }, tool.name),
+    el('span', { class: 'rail-card-cat' }, category.name)
+  ]);
+  card.addEventListener('click', () => selectTool(tool.id));
+  return card;
+}
+
 function renderHome() {
   swapContent((container) => {
-    const eyebrow = el('p', { class: 'section-eyebrow' }, 'CYBERSEC-TOOLKIT · 100% CLIENT-SIDE');
-    const title = el('h1', { class: 'home-title' }, `${TOTAL_TOOL_COUNT} tools, ${allCategoriesForLookup().length} sections, zero servers.`);
-    const meta = el('p', { class: 'dashboard-meta tabular-nums' }, `Nothing you type is sent anywhere except the ${EXTERNAL_API_TOOL_IDS.size} tools explicitly marked 🌐 (HIBP breach check; DNS, WHOIS, and IP geolocation lookups; SPF, DKIM, DMARC, and BIMI lookups; and the combined Domain Health check), each of which shows exactly what it calls before you use it.`);
+    const dash = el('div', { class: 'dashboard' });
 
-    // One hero card per pinned tool — same dashboard-hero treatment Recipe
-    // Chain always had. Recipe Chain keeps its existing "Recipe Builder"
-    // branded title (PINNED_CATEGORY.name predates the second pinned tool);
-    // Auto-Decode has no separate brand name, so its own tool name is used.
-    const heroes = PINNED_CATEGORY.tools.map((tool) => {
-      const heroCopy = TOOL_COPY[tool.id];
-      const heroTitle = tool.id === RECIPE_TOOL.id ? PINNED_CATEGORY.name : tool.name;
-      const hero = el('button', { class: 'landing-card dashboard-hero' }, [
-        el('h3', { class: 'landing-card-title' }, heroTitle),
-        el('p', { class: 'landing-card-desc' }, heroCopy ? heroCopy.what : '')
-      ]);
-      hero.addEventListener('click', () => selectTool(tool.id));
-      contentTooltipCleanups.push(attachTooltip(hero, () => [tool.name]));
-      return hero;
+    // ---- Hero: the Magic Wand, front and centre ----
+    dash.appendChild(el('p', { class: 'hero-eyebrow' }, `CYBERSEC TOOLKIT · ${TOTAL_TOOL_COUNT} TOOLS · 100% LOCAL`));
+    dash.appendChild(el('h1', { class: 'hero-title' }, 'Paste anything. I’ll figure out what it is.'));
+    dash.appendChild(el('p', { class: 'hero-sub' }, 'Encoded, encrypted, or a mystery string — the Magic Wand runs every cipher and encoding at once and ranks what comes out, most likely on top. Nothing leaves your browser.'));
+
+    const magicInput = el('textarea', { class: 'magic-input', rows: '3', placeholder: 'e.g. XRPCTCRGNEI   or   aGVsbG8gd29ybGQ=   or a stack of both', spellcheck: 'false' });
+    const magicResults = el('div', { class: 'magic-results' });
+    let magicTimer = null;
+    magicInput.addEventListener('input', () => {
+      clearTimeout(magicTimer);
+      magicTimer = setTimeout(() => renderMagicResults(magicResults, magicInput.value), 160);
     });
+    dash.appendChild(el('div', { class: 'magic-box' }, [
+      el('div', { class: 'magic-prompt' }, [el('span', { class: 'magic-caret' }, '›'), magicInput]),
+      magicResults
+    ]));
 
-    const grid = el('div', { class: 'card-grid' }, CATEGORIES.map((category) => {
-      const isPentest = category.slug === 'pentest-ctf-reference';
-      const card = el('button', { class: isPentest ? 'landing-card dashboard-card-info' : 'landing-card' }, [
-        el('div', { class: 'landing-card-header' }, [
-          el('h3', { class: 'landing-card-title' }, category.name),
-          el('span', { class: 'landing-card-count' }, `${category.tools.length} tools`)
+    // ---- Recently used ----
+    const recents = recentToolIds(6).map(toolRailCard).filter(Boolean);
+    if (recents.length) {
+      dash.appendChild(el('div', { class: 'rail' }, [
+        el('div', { class: 'rail-h' }, 'Recently used'),
+        el('div', { class: 'rail-grid' }, recents)
+      ]));
+    }
+
+    // ---- Pinned ----
+    const pins = favorites.map(toolRailCard).filter(Boolean);
+    if (pins.length) {
+      dash.appendChild(el('div', { class: 'rail' }, [
+        el('div', { class: 'rail-h' }, 'Pinned'),
+        el('div', { class: 'rail-grid' }, pins)
+      ]));
+    }
+
+    // ---- Browse by category ----
+    dash.appendChild(el('div', { class: 'rail-h rail-h-browse' }, 'Browse all tools'));
+    const grid = el('div', { class: 'cat-grid' }, CATEGORIES.map((category) => {
+      const card = el('button', { class: 'cat-card', style: `--hue:${hueFor(category.slug)}` }, [
+        el('div', { class: 'cat-card-top' }, [
+          el('h3', { class: 'cat-card-name' }, category.name),
+          el('span', { class: 'cat-card-count tabular-nums' }, String(category.tools.length))
         ]),
-        el('p', { class: 'landing-card-desc' }, firstSentenceOnly(category.intro))
+        el('p', { class: 'cat-card-desc' }, firstSentenceOnly(category.intro))
       ]);
       card.addEventListener('click', () => navigateToSection(category.slug));
       contentTooltipCleanups.push(attachTooltip(card, () => category.tools.map((t) => t.name)));
       return card;
     }));
+    dash.appendChild(grid);
 
-    container.appendChild(el('div', { class: 'dashboard' }, [eyebrow, title, meta, ...heroes, grid]));
+    container.appendChild(dash);
+    setTimeout(() => { try { magicInput.focus(); } catch { /* ignore */ } }, 30);
   });
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
-  setBreadcrumb({ toolName: 'Welcome' });
+  setBreadcrumb({ toolName: 'Home' });
   document.title = 'cybersec-toolkit';
 }
 
@@ -271,7 +393,8 @@ function renderTool(toolId) {
   setBreadcrumb({
     sectionName: isPinned ? null : category.name,
     sectionSlug: isPinned ? null : category.slug,
-    toolName: tool.name
+    toolName: tool.name,
+    toolId
   });
   if (!isPinned) setGroupExpanded(category.slug, true);
   sidebar.classList.remove('open');
@@ -347,6 +470,7 @@ function navigateToHash(hash) {
 }
 
 function selectTool(toolId) {
+  recordToolUse(toolId);
   navigateToHash(toolId);
   clearSearch();
 }

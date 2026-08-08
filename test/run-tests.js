@@ -35,6 +35,8 @@ import { lookupHashInDemoWordlist, SUPPORTED_ALGORITHMS } from '../js/lib/wordli
 import { COMMON_PASSWORDS_DEMO } from '../data/common-passwords.js';
 import { parseDnsResponse, parseRdapResponse, parseIpGeoResponse, buildDnsUrl, buildRdapUrl, buildIpGeoUrl, lookupWhois, lookupDns, isPlausibleDomain } from '../js/lib/net-lookups.js';
 import { crackTimeLog10Seconds, humanizeLog10Seconds, verdictBand, assessStrength, ATTACKER_TIERS } from '../js/lib/crack-time.js';
+import { crackHashes, detectHashType } from '../js/lib/hash-cracker.js';
+
 import { qrEncode, QR_CAPACITY } from '../js/lib/qr-encode.js';
 import { qrDecode } from '../js/lib/qr-decode.js';
 import { hotp, generateTotp } from '../js/lib/totp.js';
@@ -2366,3 +2368,41 @@ test('auto-decode: Atbash ciphertext is recovered directly by the Magic Wand', (
   assert.ok(found, 'atbash decode should appear among the candidates');
   assert.deepEqual(found.path, ['atbash']);
 });
+
+
+// ---------------------------------------------------------------------------
+// hash-cracker.js — offline dictionary + rules attack
+// ---------------------------------------------------------------------------
+test('hash-cracker: detects hash type by length', () => {
+  assert.equal(detectHashType('5f4dcc3b5aa765d61d8327deb882cf99').name, 'MD5');
+  assert.equal(detectHashType('a'.repeat(40)).name, 'SHA-1');
+  assert.equal(detectHashType('a'.repeat(64)).name, 'SHA-256');
+  assert.equal(detectHashType('xyz'), null);
+});
+
+test('hash-cracker: cracks a common MD5 from the wordlist', async () => {
+  const out = await crackHashes([md5Hex('password')]);
+  assert.equal(out.type, 'MD5');
+  assert.equal(out.results[0].plaintext, 'password');
+});
+
+test('hash-cracker: cracks a rule-mangled password (capitalized + year)', async () => {
+  const out = await crackHashes([md5Hex('Dragon2024')]);
+  assert.equal(out.results[0].plaintext, 'Dragon2024');
+});
+
+test('hash-cracker: batch cracks several hashes in one pass', async () => {
+  const out = await crackHashes([md5Hex('monkey'), md5Hex('letmein')]);
+  const plains = out.results.map((r) => r.plaintext).sort();
+  assert.deepEqual(plains, ['letmein', 'monkey']);
+});
+
+test('hash-cracker: reports not-found for a hash whose plaintext is not in the wordlist', async () => {
+  const out = await crackHashes(['5b31f93c09ad1d065c0491b764d04933']);
+  assert.equal(out.results[0].plaintext, null);
+});
+
+test('hash-cracker: rejects mixed hash lengths in one batch', async () => {
+  await assert.rejects(() => crackHashes([md5Hex('password'), 'a'.repeat(64)]), /one hash type at a time/);
+});
+
