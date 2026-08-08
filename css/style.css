@@ -950,3 +950,27 @@ table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
 /* The realistic serious-attacker row — the one the verdict is anchored to. */
 .pw-ref-row td { background: color-mix(in srgb, var(--pw) 7%, transparent); }
 .pw-ref-row .pw-tier-time { color: var(--pw); }
+
+/* ============================================================
+   Classical Cipher Cracker — ranked results
+   ============================================================ */
+.cc-best { border-left: 3px solid var(--text-dim); }
+.cc-best.cc-strong { border-left-color: var(--accent); }
+.cc-best.cc-fair   { border-left-color: #d4b429; }
+.cc-best.cc-weak   { border-left-color: #f0883e; }
+.cc-best.cc-none   { border-left-color: var(--danger); }
+.cc-best-label { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+.cc-best-text { font-size: var(--text-lg); font-family: var(--mono); word-break: break-all; margin: 6px 0 10px; color: var(--text); }
+.cc-bar { height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden; }
+.cc-bar-fill { height: 100%; background: var(--accent); transition: width 200ms ease-out; }
+.cc-others-h { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); margin: 16px 0 6px; }
+.cc-table td { vertical-align: top; }
+.cc-cipher { color: var(--text-dim); font-size: var(--text-sm); white-space: nowrap; }
+.cc-cand { font-family: var(--mono); word-break: break-all; }
+.cc-score { text-align: right; font-weight: 600; white-space: nowrap; }
+.cc-score.cc-strong { color: var(--accent); }
+.cc-score.cc-fair { color: #d4b429; }
+.cc-score.cc-weak { color: #f0883e; }
+.cc-score.cc-none { color: var(--text-dim); }
+.cc-note { margin-top: 14px; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); font-size: var(--text-sm); color: var(--text-dim); line-height: 1.5; }
+.field-col { display: flex; flex-direction: column; gap: 4px; }

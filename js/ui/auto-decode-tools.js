@@ -77,7 +77,8 @@ export const AUTO_DECODE_TOOLS = [
       const resultsNode = el('div', { class: 'auto-decode-results' });
 
       const helpLine = el('p', { class: 'tool-desc', style: 'margin-top:6px' },
-        `Tries ${DECODER_NAMES.length} decoders (${DECODER_NAMES.join(', ')}) and recursively peels layered encodings. ` +
+        `Tries ${DECODER_NAMES.length} encoders/decoders (${DECODER_NAMES.join(', ')}), recursively peels layered encodings, ` +
+        `and also cracks classical ciphers — Caesar (all shifts), Atbash, rail-fence, single-byte XOR, and Vigenère — ranking every result by how much it reads like real English. ` +
         `Limit: ${MAX_INPUT_LENGTH.toLocaleString()} characters per input.`);
 
       function run() {

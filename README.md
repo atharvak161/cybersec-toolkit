@@ -83,7 +83,7 @@ Lookup — no new external host was introduced to build them.
   entry point plus 9 collapsible category groups — Encoding & Ciphers,
   Hashing & Integrity, Cryptography, Passwords & Credential Safety, Files
   & Metadata, Network & Recon, Email Authentication, Developer Utilities,
-  and Pentest & CTF Reference (10 sections total, 56 tools). Each category has its own
+  and Pentest & CTF Reference (10 sections total, 58 tools). Each category has its own
   section landing page (an intro blurb plus a card grid of its tools),
   collapsible/expandable group state persisted to `localStorage`, and a
   quick-search box (press `/`) that filters across all tools by name. The
@@ -162,6 +162,8 @@ scanner the way a production QR library is.
 | URL encode/decode | Working |
 | Binary encode/decode | Working |
 | ROT13 / Caesar cipher | Working |
+| Classical Cipher Cracker (Caesar/Atbash/Vigenère/XOR/rail-fence, auto-ranked) | Working |
+| Enigma Machine (settings-based simulator) | Working |
 | MD5 / SHA-1 / SHA-256 / SHA-512 / SHA-3-256 / CRC32 (Hash Generator) | Working |
 | HMAC generator (HS1/256/384/512) | Working |
 | Hash-type identifier | Working (heuristic — many algorithms share output lengths) |

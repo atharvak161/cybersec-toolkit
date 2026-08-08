@@ -9,6 +9,7 @@
 
 import { el, clear } from './ui/helpers.js';
 import { ENCODING_TOOLS } from './ui/encoding-tools.js';
+import { CIPHER_TOOLS } from './ui/cipher-tools.js';
 import { HASHING_TOOLS } from './ui/hashing-tools.js';
 import { CRYPTO_TOOLS } from './ui/crypto-tools.js';
 import { RECIPE_TOOL } from './ui/recipe-tools.js';
@@ -34,7 +35,7 @@ const CATEGORIES = [
   {
     name: 'Encoding & Ciphers',
     slug: 'encoding-ciphers',
-    tools: ENCODING_TOOLS,
+    tools: [...ENCODING_TOOLS, ...CIPHER_TOOLS],
     intro: "Convert data between representations: hex, Base64 and its cousins, URL encoding, classic ciphers, Morse. Reach for this section whenever you're staring at text that's obviously transformed and you need to see what's underneath, or need to produce that transformation yourself."
   },
   {

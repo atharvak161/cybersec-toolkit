@@ -60,6 +60,14 @@ export const TOOL_COPY = {
     what: 'Encodes and decodes the classic Unix-to-Unix uuencode format.',
     when: "You've inherited an old email attachment or Usenet-era file dump that still uses begin/end uuencoding and need to extract the content."
   },
+  'cipher-cracker': {
+    what: 'Pastes in ciphertext and automatically tries every classical cipher it knows — Caesar (all 26 shifts), Atbash, rail-fence, single-byte XOR, and Vigenère (recovering the key) — then ranks the results by how much each reads like real English and hands you the most likely plaintext with a confidence score.',
+    when: "You've got a scrambled string from a CTF, a puzzle, or a suspicious note and you don't know which cipher was used — paste it here and let the tool find the answer instead of guessing shifts by hand."
+  },
+  'enigma': {
+    what: 'A settings-based simulator of the WWII Enigma machine (rotors I–V, reflectors B/C, ring settings, start positions, and a plugboard). Because Enigma is its own inverse, the same settings both encrypt and decrypt.',
+    when: 'You have Enigma settings (or want to explore how the machine worked) and need to encrypt or decrypt a message. Recovering unknown settings from ciphertext alone — the job the Bombe did — is a separate, much larger problem and is not what this does.'
+  },
   'rot13-caesar': {
     what: 'Shifts letters by a fixed amount — 13 by default (ROT13), or any shift you set.',
     when: 'You spot an obviously letter-shifted forum post or CTF hint and want the plaintext without doing the arithmetic yourself.'

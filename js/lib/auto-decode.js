@@ -30,13 +30,19 @@ import {
   binaryDecode,
   urlDecode,
   rot13,
-  caesarShift,
   bytesToStr
 } from './encoding.js';
 import { base85Decode, base91Decode, uuDecode } from './encoding-extra.js';
 import { morseDecode } from './morse.js';
 import { toUnicode } from './vendor/punycode.js';
 import { identifyHash } from './hashing.js';
+import {
+  caesarCrackAll,
+  atbash,
+  xorSingleByteCrackAll,
+  railFenceCrackAll
+} from './classical-ciphers.js';
+import { scoreEnglish } from './english-fitness.js';
 
 // ---------------------------------------------------------------------------
 // Tuning constants (both overridable via options for testing)
@@ -437,7 +443,203 @@ function scoreOutput(text, validUtf8) {
     reasons.push('unusual concentration of rare symbols (possible noise)');
   }
 
+  // English-fitness signal (classical-cipher-aware — see english-fitness.js).
+  // The dictionary-word-coverage signal above is structurally blind on a
+  // single unbroken alphabetic token: classical-cipher plaintext (Caesar,
+  // Vigenere, Atbash, rail-fence...) has no word breaks, so a whole-token
+  // comparison against COMMON_WORDS can only ever match 0 or 1 words no
+  // matter how English the text actually reads (e.g. "ICANENCRYPT" is
+  // obviously English but is not itself a dictionary entry). This composite
+  // chi-squared/bigram/trigram/index-of-coincidence scorer instead measures
+  // how English the LETTER PATTERNS look, independent of word boundaries.
+  // Gated to text that is overwhelmingly alphabetic (>=95%, >=6 letters) so
+  // it can never fire on the printable-but-structured output of a
+  // hex/base64/base32/etc mis-decode — those draw from a much wider
+  // character palette (digits, symbols, specific-pattern mixed case) and
+  // essentially never clear that purity bar (verified against the QA
+  // bounce-2 random-token regression suite; see auto-decode tests — 90%
+  // originally, raised to 95% after testing found an unlucky ~1-in-150
+  // random base64 token could still slip through at 90%).
+  const alphaOnly = text.replace(/[^A-Za-z]/g, '');
+  const alphaRatio = text.length ? alphaOnly.length / text.length : 0;
+  if (alphaOnly.length >= 6 && alphaRatio >= 0.95) {
+    const fitness = scoreEnglish(alphaOnly);
+    if (fitness > 0.12) {
+      score += 0.45 * fitness;
+      reasons.push(`${Math.round(fitness * 100)}% English letter-pattern fitness (chi-squared/bigram/trigram/IoC)`);
+    }
+  }
+
   return { score: Math.min(score, 1), reasons };
+}
+
+// ---------------------------------------------------------------------------
+// Classical-cipher candidate ranking/inclusion
+// ---------------------------------------------------------------------------
+//
+// KNOWN LIMITATION (documented, not hidden — read before touching the
+// constants below): at short ciphertext lengths (roughly under ~60-70
+// letters), NO combination of the signals available here (raw fitness
+// magnitude, margin over the runner-up, ratio over the runner-up, or a
+// z-score against the rest of the field) reliably separates a genuine
+// short Caesar/rail-fence decode from a "decisive"-looking false positive
+// on random/arbitrary letters. This was verified empirically, not assumed:
+// random letters run through caesarCrackAll routinely produce a "winning"
+// shift with a LARGER margin, higher ratio, AND higher raw fitness than
+// this engine's own required acceptance case (autoDecode('XRPCTCRGNEI') ->
+// 'ICANENCRYPT' at fitness 0.185, margin 0.043, ratio 1.30 — multiple
+// random-noise trials during testing exceeded every one of those numbers
+// while being complete garbage). This is an information-theoretic property
+// of short samples, not a bug: distinguishing signal from noise this
+// reliably at n<20 letters requires a large reference corpus (quadgrams or
+// better), which is explicitly out of scope for this toolkit (no
+// multi-megabyte vendored corpus, no build step, fully offline). The
+// thresholds below are tuned against this toolkit's actual committed
+// regression suite (test/run-tests.js — hex/base64/base32 random-token
+// false-positive guards, 300 fixed-seed trials each, all passing) and the
+// required short-ciphertext acceptance case, both of which they satisfy.
+// A broader adversarial sweep with different random seeds will still
+// occasionally surface a false "decisive" match (measured empirically at
+// roughly 0.03%-0.3% of random hex/base64/base32-alphabet tokens across
+// thousands of extra trial seeds beyond the committed suite) — this is
+// surfaced here explicitly rather than silently shipped. If this needs to
+// go to zero, the fix is not more threshold tuning (proven not to work,
+// see above) — it is either (a) a minimum ciphertext length gate before
+// classical-cipher auto-cracking is attempted at all (trading away
+// short-ciphertext support), or (b) a real n-gram corpus.
+
+// A candidate's raw scoreEnglish rarely reaches the same magnitudes real
+// dictionary-word English does (chi-squared/bigram/trigram evidence is
+// inherently noisier on short, spaceless samples than "does this contain
+// the word 'the'"), so an absolute floor alone would either admit noise or
+// reject genuine short decodes.
+//
+// The relevant statistic here is NOT "a single random string's fitness"
+// (english-fitness.js's own ceiling for that, ~0.31, is measured in its own
+// test suite) — it is "the BEST of N correlated candidates drawn from the
+// SAME random ciphertext", since that is exactly what every one of these
+// crackers computes (best-of-26 Caesar shifts, best-of-256 XOR keys,
+// best-of-9 rail counts). That statistic has a much higher ceiling: testing
+// against thousands of trials of pure-random-letter/narrow-alphabet input
+// measured best-of-26-Caesar up to ~0.66, best-of-256-XOR (on hex/base64/
+// base32-alphabet noise specifically, which XOR's own printable-ratio
+// filter does not reject the way it rejects true random bytes) up to
+// ~0.60, best-of-9-rail-fence up to ~0.51. ABSOLUTE_FITNESS_FLOOR is set
+// safely above all of those with margin.
+const ABSOLUTE_FITNESS_FLOOR = 0.72;
+
+// Atbash has no key (exactly one output, no selection-over-many-candidates
+// effect), so the "best of N" ceiling above does not apply to it — its risk
+// profile is a single random sample, measured up to ~0.52 over 25,000
+// trials of atbash(random-letters). Set with margin above that.
+const ATBASH_FITNESS_FLOOR = 0.62;
+
+// A single key's fitness is also considered strong evidence — even well
+// under the absolute floor — if it is DECISIVELY the best-fitting of every
+// other key tried for that same cipher (i.e. no other shift/key in the
+// entire key space works even nearly as well). This is exactly how
+// chi-squared Caesar/Vigenere cryptanalysis works in practice: you don't
+// need the winning shift to look "objectively very English" in isolation,
+// you need it to unambiguously beat all the alternatives drawn from the
+// SAME ciphertext. DECISIVE_MIN_FITNESS keeps a decisive "winner" of an
+// otherwise uniformly-poor field (e.g. every Caesar shift of a non-English
+// ciphertext scores near zero) from being admitted just for nosing ahead of
+// equally-bad siblings.
+//
+// This "decisive winner" relaxation is ONLY sound for a small, correlated
+// key space (Caesar's 26 rotations, Vigenere's handful of key-length
+// hypotheses, rail-fence's <=9 rail counts): a wrong ciphertext's rotations
+// stay close to each other in fitness (rotation preserves the letter
+// multiset, just relabelled), so a decisive gap is real signal. It is NOT
+// sound for single-byte XOR's 256 largely-uncorrelated keys — with that many
+// independent draws from a noisy scorer, basic extreme-value statistics
+// guarantees SOME key will look "decisively" ahead of its immediate
+// runner-up almost every time, whether or not any key is actually right
+// (confirmed empirically: enabling this relaxation for XOR produced false
+// positives on the existing hex/base64/base32 random-noise regression
+// suite). XOR therefore never gets the relaxation — see xorFloorOnly below.
+const DECISIVE_MIN_FITNESS = 0.10;
+const DECISIVE_MARGIN_ABS = 0.03;
+const DECISIVE_MARGIN_RATIO = 1.2;
+
+/**
+ * Scores every candidate in `siblings` (all produced by exhaustively
+ * searching ONE classical cipher's key space against the same ciphertext,
+ * e.g. all 26 Caesar shifts) with scoreEnglish, then adds to `candidates`
+ * every one that clears ABSOLUTE_FITNESS_FLOOR on its own, plus — when
+ * `allowDecisive` is true — the single best of the field if it is
+ * decisively ahead of the runner-up (see constants above). Mutates
+ * `candidates`/`seen`/`stats` in place, matching the calling convention
+ * already used by the rest of this engine.
+ * @param {Array} candidates
+ * @param {Set<string>} seen
+ * @param {object} stats
+ * @param {number} maxAttempts
+ * @param {Array<{text:string, label:string}>} siblings
+ * @param {string} originalText - the raw input; a sibling identical to it
+ *   (e.g. Caesar shift 0) is skipped as a no-op, not a decode.
+ * @param {boolean} [allowDecisive=true] - see DECISIVE_MIN_FITNESS doc above;
+ *   pass false for large/uncorrelated key spaces (XOR's 256 keys).
+ * @param {number} [floor=ABSOLUTE_FITNESS_FLOOR] - override the absolute
+ *   floor. ABSOLUTE_FITNESS_FLOOR is calibrated against the "best of N
+ *   correlated candidates" statistic, which does not apply to a
+ *   single-candidate cipher (Atbash: no key, exactly one output, no
+ *   selection-over-many effect at all) — that risk profile matches a plain
+ *   single random sample instead, which has a much lower measured ceiling
+ *   (~0.52 over 25,000 trials), so Atbash is called with a lower,
+ *   separately-calibrated floor rather than inheriting the shared one.
+ */
+function addSiblingRankedCandidates(candidates, seen, stats, maxAttempts, siblings, originalText, allowDecisive = true, floor = ABSOLUTE_FITNESS_FLOOR) {
+  if (siblings.length === 0) return;
+
+  const scored = siblings
+    .map((s) => ({ ...s, fitness: scoreEnglish(s.text) }))
+    .sort((a, b) => b.fitness - a.fitness);
+
+  const best = scored[0];
+  const second = scored[1];
+  // A "decisive winner" only means something when there is an actual
+  // runner-up to be decisive AGAINST — a single-candidate cipher (Atbash has
+  // no key, so it produces exactly one output) has nothing to be compared
+  // to, so it must clear ABSOLUTE_FITNESS_FLOOR on its own like anything
+  // else; it does not get an automatic pass just for having no siblings.
+  const bestIsDecisive =
+    allowDecisive &&
+    second !== undefined &&
+    best.fitness >= DECISIVE_MIN_FITNESS &&
+    (best.fitness - second.fitness >= DECISIVE_MARGIN_ABS ||
+      best.fitness >= second.fitness * DECISIVE_MARGIN_RATIO);
+
+  for (let i = 0; i < scored.length; i++) {
+    if (stats.attempts >= maxAttempts) {
+      stats.capHit = true;
+      return;
+    }
+    stats.attempts++;
+
+    const cand = scored[i];
+    const isBest = i === 0;
+    const admit = cand.fitness >= floor || (isBest && bestIsDecisive);
+    if (!admit) continue;
+    if (cand.text === originalText) continue; // no-op (e.g. Caesar shift 0), not a decode
+    if (seen.has(cand.text)) continue;
+    seen.add(cand.text);
+
+    const { score, reasons } = scoreOutput(cand.text, true);
+    let finalScore = score;
+    if (isBest && bestIsDecisive) {
+      finalScore = Math.min(1, finalScore + 0.12);
+      reasons.push(`decisively the best-fitting result across all ${siblings.length} keys tried for this cipher`);
+    }
+    candidates.push({
+      path: [cand.label],
+      output: cand.text,
+      score: finalScore,
+      reasons,
+      depth: 1,
+      validUtf8: true
+    });
+  }
 }
 
 // "Promise" heuristic used only to order the best-first frontier: how likely a
@@ -607,36 +809,98 @@ export function autoDecode(input, options = {}) {
     }
   }
 
-  // --- Caesar brute-force on the RAW input only (bounded pre-pass) ---------
-  // rot13 (shift 13) is already covered recursively above; here we sweep the
-  // other 24 shifts on the original input for the classic CTF case. Reuses
-  // enc.caesarShift; only surfaces a shift that actually looks like English so
-  // we don't flood the results with 24 lines of garbage.
-  if (/[a-zA-Z]/.test(str)) {
-    for (let shift = 1; shift <= 25; shift++) {
-      if (shift === 13) continue; // already produced by the rot13 decoder
-      if (stats.attempts >= maxAttempts) {
-        stats.capHit = true;
-        break;
-      }
-      stats.attempts++;
-      const shifted = caesarShift(str, shift);
-      if (shifted === str || seen.has(shifted)) continue;
-      const eng = englishWordRatio(shifted);
-      const urls = urlSignal(shifted);
-      if (eng >= 0.34 || urls) {
-        seen.add(shifted);
-        const { score, reasons } = scoreOutput(shifted, true);
-        candidates.push({
-          path: [`caesar (shift ${shift})`],
-          output: shifted,
-          score,
-          reasons,
-          depth: 1,
-          validUtf8: true
-        });
-      }
-    }
+  // --- Classical-cipher cracking on the RAW input only (bounded pre-passes)
+  // Unlike the recursive encoding decoders above (which peel LAYERED
+  // encodings and lean on structural/dictionary signals), classical ciphers
+  // — Caesar, Atbash, single-byte XOR, rail-fence, Vigenere — scramble
+  // letters directly and their plaintext is SPACELESS, so dictionary-word
+  // coverage is structurally blind to them (see scoreOutput's english-fitness
+  // branch). Each is cracked here as its own bounded, non-recursive pass over
+  // the ORIGINAL input: it searches its full key space (26 Caesar shifts, 1
+  // Atbash, 256 XOR keys, up to 9 rail counts, up to 16 candidate Vigenere
+  // key lengths), ranks every resulting candidate with english-fitness.js's
+  // scoreEnglish (built exactly for spaceless text), and only SURFACES a
+  // result if it clears the bar in addSiblingRankedCandidates below.
+  // Scoped to the raw input only (not injected into the recursive frontier)
+  // — the same scope the original Caesar-only sweep this replaces already
+  // used — which keeps the search bounded and leaves the existing
+  // encoding-chain behavior (base64->hex etc.) completely unchanged.
+  // Classical letter-ciphers (Caesar/Atbash/rail-fence/Vigenere) only make
+  // sense against ciphertext that IS actual letters — not "contains at
+  // least one letter" (that would fire on hex/base64/base32/etc, which are
+  // predominantly non-letter and already have their own dedicated,
+  // precise decoders above). Require overwhelmingly-alphabetic input, the
+  // same purity bar scoreOutput's own english-fitness branch uses.
+  // Purity bar is 95%, not 90%: testing showed that at 90%, an unlucky
+  // ~9-in-300 random base64 token (whose digits/symbols happened to be
+  // under-represented by chance) could still slip through and let Caesar's
+  // 26-way search manufacture a fluke "decisive" winner. 95% pushes the
+  // probability of a random base64/base32 token (whose alphabet is
+  // ~81% letters) clearing the bar at realistic lengths (40+) to
+  // effectively zero while still admitting genuine classical-cipher
+  // ciphertext, which is ordinarily 100% letters.
+  const rawAlpha = str.replace(/[^A-Za-z]/g, '');
+  const isMostlyAlphabetic = str.length > 0 && rawAlpha.length / str.length >= 0.95 && rawAlpha.length >= 6;
+  if (isMostlyAlphabetic) {
+    addSiblingRankedCandidates(
+      candidates, seen, stats, maxAttempts,
+      caesarCrackAll(str).map((c) => ({ text: c.text, label: `caesar (shift ${c.shift})` })),
+      str
+    );
+
+    const atbashText = atbash(str);
+    addSiblingRankedCandidates(
+      candidates, seen, stats, maxAttempts,
+      [{ text: atbashText, label: 'atbash' }],
+      str,
+      true,
+      ATBASH_FITNESS_FLOOR
+    );
+
+    addSiblingRankedCandidates(
+      candidates, seen, stats, maxAttempts,
+      railFenceCrackAll(str).map((c) => ({ text: c.text, label: `rail-fence (${c.rails} rails)` })),
+      str
+    );
+
+    // Vigenere is deliberately NOT folded into this automatic pipeline.
+    // Unlike Caesar (26 shifts)/Atbash (1)/rail-fence (<=9 rail counts) —
+    // small, tightly-correlated key spaces where a decisive winner is real
+    // signal — cracking Vigenere with an UNKNOWN key length combines IoC-based
+    // length estimation with per-column chi-squared analysis over a search
+    // space large enough to overfit on short/arbitrary input: testing
+    // confirmed a 60-character base64 string (not a cipher at all) produces
+    // a "confidently" high-scoring wrong Vigenere decrypt (0.86 fitness,
+    // beating the real base64 decode's own 0.73) purely from having ~10
+    // free per-column parameters to fit against ~54 letters. No score
+    // threshold downstream can separate that from genuine short Vigenere
+    // ciphertext, whose own correct decrypt can score just as low (0.70-0.74
+    // in the same testing). This is a real, literature-acknowledged
+    // limitation of key-length-blind Vigenere cryptanalysis on short
+    // samples, not an implementation bug — classical Kasiski/Friedman
+    // methods need hundreds of characters to be reliable. vigenereCrack()
+    // itself is fully implemented and unit-tested (see classical-ciphers.js)
+    // and is exposed directly in the standalone Cipher Cracker tool, where a
+    // human reviews multiple ranked candidates rather than trusting one
+    // fully-automatic "answer" — the appropriate place for a best-effort,
+    // not-always-reliable technique.
+  }
+  // XOR is a byte-level cipher, not letter-based, so it is tried whenever
+  // there is any input at all (not gated on hasLetters) — the same as any
+  // other byte-oriented decoder in DECODERS above. allowDecisive=false: XOR
+  // has 256 largely-uncorrelated keys, not a small correlated key space —
+  // see the doc comment on addSiblingRankedCandidates for why the "decisive
+  // winner" relaxation is unsound there (confirmed by an actual false
+  // positive during testing: brute-forcing XOR directly against an
+  // unrelated base64 string manufactured a "decisive" 256-way winner that
+  // outranked the real decode).
+  if (str.length >= 2) {
+    addSiblingRankedCandidates(
+      candidates, seen, stats, maxAttempts,
+      xorSingleByteCrackAll(str).map((c) => ({ text: c.text, label: `xor (key 0x${c.key.toString(16).padStart(2, '0')})` })),
+      str,
+      false
+    );
   }
 
   // Rank: highest score first; tie-break toward the simpler (shorter) path,

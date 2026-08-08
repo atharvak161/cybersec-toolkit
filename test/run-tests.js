@@ -62,6 +62,16 @@ import {
   parseAuthenticationResults, parseReceivedSpf, parseDkimSignatureHeader,
   analyzeAuthentication, analyzeEmailHeaders
 } from '../js/lib/email-headers.js';
+import {
+  scoreEnglish, lettersOnly, chiSquaredPerChar, indexOfCoincidence,
+  bigramDensity, trigramDensity, vowelRatio, ENGLISH_FREQ
+} from '../js/lib/english-fitness.js';
+import {
+  caesarCrackAll, atbash, xorSingleByteCrackAll,
+  railFenceDecrypt, railFenceCrackAll,
+  vigenereDecrypt, vigenereEncrypt, vigenereCrack
+} from '../js/lib/classical-ciphers.js';
+import { enigmaProcess, ENIGMA_ROTOR_NAMES, ENIGMA_REFLECTOR_NAMES } from '../js/lib/enigma.js';
 
 // ============================================================
 // Encoding
@@ -2126,4 +2136,233 @@ test('net-lookups: lookupDns turns a non-JSON (HTML error page) response into a 
     json: () => Promise.reject(new SyntaxError("Unexpected token '<'"))
   });
   await assert.rejects(() => lookupDns('example.com', 'TXT', htmlErrorFetch), /did not return a valid response/);
+});
+
+// ============================================================
+// english-fitness.js — compact, corpus-free English-likeness scorer
+// ============================================================
+
+test('english-fitness: scoreEnglish ranks a real Caesar-shift-15 decode clearly above two near-miss/noise strings', () => {
+  // These three strings are not arbitrary: XRPCTCRGNEI is the toolkit's own
+  // auto-decode acceptance ciphertext, KECPGPETARV is its rot13 (the
+  // "almost inevitable wrong guess" a naive decoder would try first), and
+  // ICANENCRYPT is the true Caesar shift-15 plaintext.
+  const real = scoreEnglish('ICANENCRYPT');
+  const rot13OfSame = scoreEnglish('KECPGPETARV');
+  const rawCiphertext = scoreEnglish('XRPCTCRGNEI');
+  assert.ok(real > rot13OfSame, `real (${real}) should beat rot13-noise (${rot13OfSame})`);
+  assert.ok(real > rawCiphertext, `real (${real}) should beat raw ciphertext (${rawCiphertext})`);
+  assert.ok(real > rot13OfSame * 1.5, 'the win should be decisive, not marginal');
+});
+
+test('english-fitness: scoreEnglish rates a real English sentence (no spaces) as high confidence', () => {
+  const score = scoreEnglish('THISISASECRETMESSAGE');
+  assert.ok(score > 0.55, `expected clearly high confidence, got ${score.toFixed(3)}`);
+});
+
+test('english-fitness: scoreEnglish rates fixed random-letter strings as low confidence', () => {
+  // Fixed, pre-selected strings (not cherry-picked post-hoc) at a range of
+  // realistic lengths — not a single lucky draw.
+  const samples = ['ABZSNKMGOSGETNFJHNHZGWED', 'UEMGJVWYUKPZEAPJNPFNRDBCNV', 'GUORAVACKRJBISGELT'];
+  for (const s of samples) {
+    const score = scoreEnglish(s);
+    assert.ok(score < 0.35, `"${s}" should score low, got ${score.toFixed(3)}`);
+  }
+});
+
+test('english-fitness: scoreEnglish returns 0 for empty/too-short input, never throws', () => {
+  assert.equal(scoreEnglish(''), 0);
+  assert.equal(scoreEnglish('AB'), 0);
+  assert.doesNotThrow(() => scoreEnglish('123456!!!'));
+});
+
+test('english-fitness: helper functions are internally consistent', () => {
+  assert.equal(lettersOnly('Hello, World! 123'), 'HELLOWORLD');
+  assert.equal(chiSquaredPerChar(''), Infinity);
+  assert.ok(chiSquaredPerChar(lettersOnly('THEQUICKBROWNFOXJUMPSOVERTHELAZYDOG')) < chiSquaredPerChar('QQQQQQQQQQ'));
+  assert.equal(indexOfCoincidence('A'), 0); // fewer than 2 letters
+  assert.ok(indexOfCoincidence('AAAAAAAAAA') > indexOfCoincidence('ABCDEFGHIJ')); // repeats raise IoC
+  assert.ok(bigramDensity('THE') > 0); // "TH" is a common bigram
+  assert.ok(trigramDensity('THE') > 0); // "THE" is a common trigram
+  assert.ok(vowelRatio('AEIOU') === 1);
+  assert.ok(vowelRatio('BCDFG') === 0);
+  // Sanity: standard English single-letter frequencies sum to ~1.
+  const sum = Object.values(ENGLISH_FREQ).reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(sum - 1) < 0.01, `ENGLISH_FREQ should sum to ~1, got ${sum}`);
+});
+
+// ============================================================
+// classical-ciphers.js — Caesar/Atbash/XOR/rail-fence/Vigenere crackers
+// ============================================================
+
+test('classical-ciphers: caesarCrackAll finds shift 15 recovering ICANENCRYPT from the acceptance ciphertext', () => {
+  const all = caesarCrackAll('XRPCTCRGNEI');
+  assert.equal(all.length, 26);
+  const shift15 = all.find((c) => c.shift === 15);
+  assert.ok(shift15, 'shift 15 must be present');
+  assert.equal(shift15.text, 'ICANENCRYPT');
+});
+
+test('classical-ciphers: caesarCrackAll shift 0 is the identity (no-op)', () => {
+  const all = caesarCrackAll('HELLO');
+  assert.equal(all.find((c) => c.shift === 0).text, 'HELLO');
+});
+
+test('classical-ciphers: atbash is an involution (A<->Z substitution) and leaves non-letters alone', () => {
+  const original = 'Attack at Dawn! 123';
+  assert.equal(atbash(atbash(original)), original);
+  assert.equal(atbash('ABCXYZ'), 'ZYXCBA');
+  assert.equal(atbash('abcxyz'), 'zyxcba');
+});
+
+test('classical-ciphers: xorSingleByteCrackAll recovers a known single-byte XOR key and only returns printable results', () => {
+  const plain = 'the secret message is hidden here';
+  const key = 0x2a;
+  let xored = '';
+  for (let i = 0; i < plain.length; i++) xored += String.fromCharCode(plain.charCodeAt(i) ^ key);
+
+  const results = xorSingleByteCrackAll(xored);
+  const found = results.find((r) => r.key === key);
+  assert.ok(found, 'the correct key must be among the printable-filtered candidates');
+  assert.equal(found.text, plain);
+  // Every returned candidate must actually be overwhelmingly printable —
+  // that is the whole point of the built-in filter.
+  for (const r of results) {
+    const printable = [...r.text].filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return (c >= 0x20 && c <= 0x7e) || c === 9 || c === 10 || c === 13;
+    }).length;
+    assert.ok(printable / r.text.length >= 0.85, `key ${r.key} leaked a non-printable-heavy result`);
+  }
+});
+
+test('classical-ciphers: xorSingleByteCrackAll works with a Uint8Array input directly', () => {
+  const bytes = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
+  const key = 200;
+  const xored = bytes.map((b) => b ^ key);
+  const found = xorSingleByteCrackAll(xored).find((r) => r.key === key);
+  assert.ok(found);
+  assert.equal(found.text, 'Hello');
+});
+
+test('classical-ciphers: rail-fence round-trips through encrypt/decrypt for several rail counts', () => {
+  function railEncrypt(text, rails) {
+    const fence = Array.from({ length: rails }, () => []);
+    let rail = 0;
+    let dir = 1;
+    for (const ch of text) {
+      fence[rail].push(ch);
+      if (rail === 0) dir = 1;
+      else if (rail === rails - 1) dir = -1;
+      rail += dir;
+    }
+    return fence.flat().join('');
+  }
+  const plain = 'WEAREDISCOVEREDFLEEATONCE';
+  for (const rails of [2, 3, 4, 5, 7]) {
+    const cipher = railEncrypt(plain, rails);
+    assert.equal(railFenceDecrypt(cipher, rails), plain, `rails=${rails}`);
+  }
+});
+
+test('classical-ciphers: railFenceCrackAll tries rails 2..min(10, length-1) and includes the correct one', () => {
+  function railEncrypt(text, rails) {
+    const fence = Array.from({ length: rails }, () => []);
+    let rail = 0;
+    let dir = 1;
+    for (const ch of text) {
+      fence[rail].push(ch);
+      if (rail === 0) dir = 1;
+      else if (rail === rails - 1) dir = -1;
+      rail += dir;
+    }
+    return fence.flat().join('');
+  }
+  const plain = 'DEFENDTHEEASTWALLOFTHECASTLE';
+  const cipher = railEncrypt(plain, 4);
+  const all = railFenceCrackAll(cipher);
+  assert.ok(all.some((c) => c.rails === 4 && c.text === plain));
+  assert.equal(all[0].rails, 2);
+  assert.equal(all[all.length - 1].rails, Math.min(10, cipher.length - 1));
+});
+
+test('classical-ciphers: vigenereDecrypt/vigenereEncrypt round-trip and match a hand-computed vector', () => {
+  const plain = 'ATTACKATDAWN';
+  const key = 'LEMON';
+  const cipher = vigenereEncrypt(plain, key);
+  assert.equal(cipher, 'LXFOPVEFRNHR'); // classic textbook Vigenere example
+  assert.equal(vigenereDecrypt(cipher, key), plain);
+});
+
+test('classical-ciphers: vigenereCrack recovers the LEMON key near the top for a known short ciphertext', () => {
+  const plain = 'THISISASECRETMESSAGEHIDDENWELL';
+  const key = 'LEMON';
+  const cipher = vigenereEncrypt(plain, key);
+  const cracked = vigenereCrack(cipher);
+  assert.ok(cracked.length > 0, 'crack should return at least one candidate');
+  assert.equal(cracked[0].key, key, 'LEMON should rank #1');
+  assert.equal(cracked[0].text, plain);
+});
+
+test('classical-ciphers: vigenereCrack returns [] gracefully on too-short input, never throws', () => {
+  assert.doesNotThrow(() => vigenereCrack(''));
+  assert.deepEqual(vigenereCrack('AB'), []);
+});
+
+// ============================================================
+// enigma.js — settings-based Enigma I/M3 simulator
+// ============================================================
+
+test('enigma: matches the well-known historical test vector (I-II-III, reflector B, AAA/AAA, no plugboard)', () => {
+  const settings = { rotors: ['I', 'II', 'III'], reflector: 'B', ringSettings: ['A', 'A', 'A'], positions: ['A', 'A', 'A'] };
+  assert.equal(enigmaProcess('AAAAA', settings), 'BDZGO');
+});
+
+test('enigma: is its own inverse — encrypting then running the same settings again recovers the original', () => {
+  const settings = { rotors: ['III', 'II', 'I'], reflector: 'C', ringSettings: ['B', 'F', 'Q'], positions: ['X', 'Y', 'Z'], plugboard: 'AB CD EF' };
+  const plain = 'THEQUICKBROWNFOXJUMPSOVERTHELAZYDOG';
+  const cipher = enigmaProcess(plain, settings);
+  assert.notEqual(cipher, plain);
+  assert.equal(enigmaProcess(cipher, settings), plain);
+});
+
+test('enigma: non-letters pass through unchanged and do not advance rotors; case is preserved', () => {
+  const settings = { rotors: ['I', 'II', 'III'], reflector: 'B' };
+  const withPunct = enigmaProcess('Hello, World! 123', settings);
+  assert.ok(withPunct.includes(','));
+  assert.ok(withPunct.includes('!'));
+  assert.ok(withPunct.includes('123'));
+  assert.equal(enigmaProcess(withPunct, settings), 'Hello, World! 123');
+});
+
+test('enigma: rejects an unknown rotor or reflector with a clear error', () => {
+  assert.throws(() => enigmaProcess('A', { rotors: ['I', 'II', 'ZZ'], reflector: 'B' }), /Unknown rotor/);
+  assert.throws(() => enigmaProcess('A', { rotors: ['I', 'II', 'III'], reflector: 'Z' }), /Unknown reflector/);
+});
+
+test('enigma: exposes its supported rotor and reflector names', () => {
+  assert.deepEqual(ENIGMA_ROTOR_NAMES, ['I', 'II', 'III', 'IV', 'V']);
+  assert.deepEqual(ENIGMA_REFLECTOR_NAMES, ['B', 'C']);
+});
+
+// ============================================================
+// auto-decode.js — classical ciphers folded into the Magic Wand
+// ============================================================
+
+test('auto-decode: autoDecode finds the Caesar shift-15 decode of the acceptance ciphertext as the top, high-confidence candidate', () => {
+  const r = autoDecode('XRPCTCRGNEI');
+  assert.equal(r.candidates.length > 0, true, 'must produce at least one candidate');
+  const top = r.candidates[0];
+  assert.equal(top.output, 'ICANENCRYPT', `top candidate should be ICANENCRYPT, got "${top.output}"`);
+  assert.deepEqual(top.path, ['caesar (shift 15)']);
+  assert.ok(top.score >= 0.5, `top candidate should be high-confidence, scored ${top.score.toFixed(3)}`);
+});
+
+test('auto-decode: Atbash ciphertext is recovered directly by the Magic Wand', () => {
+  const plain = 'MEETMEATTHESECRETLOCATIONATMIDNIGHT';
+  const cipher = atbash(plain);
+  const r = autoDecode(cipher);
+  const found = r.candidates.find((c) => c.output === plain);
+  assert.ok(found, 'atbash decode should appear among the candidates');
+  assert.deepEqual(found.path, ['atbash']);
 });
