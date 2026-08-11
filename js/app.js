@@ -20,6 +20,7 @@ import { NETWORK_TOOLS } from './ui/network-tools.js';
 import { EMAIL_TOOLS } from './ui/email-tools.js';
 import { DEV_TOOLS } from './ui/dev-tools.js';
 import { PENTEST_TOOLS } from './ui/pentest-tools.js';
+import { ANALYSIS_TOOLS } from './ui/analysis-tools.js';
 import { TOOL_COPY } from './data/tool-copy.js';
 import { openCommandPalette } from './ui/command-palette.js';
 import { attachTooltip } from './ui/tooltip.js';
@@ -120,6 +121,12 @@ const CATEGORIES = [
     slug: 'pentest-ctf-reference',
     tools: PENTEST_TOOLS,
     intro: 'Reference material for authorized penetration testing and CTF work: shell payloads, injection cheat-sheets, and privilege-escalation enumeration steps. This assumes an authorized engagement or lab/CTF context throughout — same category of tool as revshells.com, PayloadsAllTheThings, or GTFOBins.'
+  },
+  {
+    name: 'Analysis & Intel',
+    slug: 'analysis-intel',
+    tools: ANALYSIS_TOOLS,
+    intro: "Triage raw material fast: pull indicators out of a threat report, score a vulnerability's severity, scan pasted text for leaked credentials, or measure a string's randomness. Reach for this when you've got unstructured intel or a config dump and need a structured, numeric read on it."
   }
 ];
 
@@ -269,7 +276,8 @@ const CATEGORY_HUE = {
   'network-recon': '#5AA9FF',
   'email-authentication': '#FF9F6B',
   'developer-utilities': '#9AA7B8',
-  'pentest-ctf-reference': '#FF6B7D'
+  'pentest-ctf-reference': '#FF6B7D',
+  'analysis-intel': '#FFB454'
 };
 function hueFor(slug) { return CATEGORY_HUE[slug] || 'var(--accent)'; }
 

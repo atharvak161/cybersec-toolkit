@@ -1100,3 +1100,16 @@ table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
 }
 .content { position: relative; z-index: 1; }
 @media (prefers-reduced-motion: reduce) { .main::before { opacity: 0.5; } }
+
+/* ---- Analysis & Intel: IOC list chips + secret-scanner matches ---- */
+.ioc-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.ioc-item {
+  font-family: var(--mono); font-size: var(--text-sm); color: var(--text);
+  background: var(--bg-input); border-radius: var(--radius);
+  padding: 5px 8px; word-break: break-all;
+}
+
+/* ---- CVSS calculator: 8-metric picker grid ---- */
+.cvss-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.cvss-field { display: flex; flex-direction: column; gap: 4px; }
+.cvss-field label { font-size: var(--text-xs); color: var(--text-dim); }

@@ -74,6 +74,9 @@ import {
   vigenereDecrypt, vigenereEncrypt, vigenereCrack
 } from '../js/lib/classical-ciphers.js';
 import { enigmaProcess, ENIGMA_ROTOR_NAMES, ENIGMA_REFLECTOR_NAMES } from '../js/lib/enigma.js';
+import { extractIocs, defang, refang } from '../js/lib/ioc.js';
+import { cvss31Base, parseCvssVector, roundup, severityFor } from '../js/lib/cvss.js';
+import { scanSecrets, shannonEntropy, describeEntropy } from '../js/lib/secret-scan.js';
 
 // ============================================================
 // Encoding
@@ -2404,5 +2407,174 @@ test('hash-cracker: reports not-found for a hash whose plaintext is not in the w
 
 test('hash-cracker: rejects mixed hash lengths in one batch', async () => {
   await assert.rejects(() => crackHashes([md5Hex('password'), 'a'.repeat(64)]), /one hash type at a time/);
+});
+
+// ---------------------------------------------------------------------------
+// ioc.js — IOC extraction + defang/refang
+// ---------------------------------------------------------------------------
+test('ioc: defang/refang round-trip on URLs, IPs, and emails', () => {
+  const original = 'Visit http://example.com or email a@b.com, host 1.2.3.4';
+  const defanged = defang(original);
+  assert.equal(defanged, 'Visit hxxp://example[.]com or email a[at]b[.]com, host 1[.]2[.]3[.]4');
+  assert.equal(refang(defanged), original);
+});
+
+test('ioc: refang tolerates https and (.)/(at) variants', () => {
+  assert.equal(refang('hxxps://evil(.)example(.)com'), 'https://evil.example.com');
+  assert.equal(refang('user(at)example[.]com'), 'user@example.com');
+});
+
+test('ioc: extractIocs categorizes and dedupes a mixed threat-report blob', () => {
+  const blob = `
+Beacon to hxxp://evil-c2[.]example[.]com/gate.php from 1[.]2[.]3[.]4 and 1.2.3.4 again.
+IPv6 host seen at 2001:db8::1 and loopback ::1.
+Also seen: http://second.example.com/path and plain domain sub.example.org.
+Contact soc@example.com or admin[at]example[.]com (same person, different notation... not deduped: different address).
+Hash: 5f4dcc3b5aa765d61d8327deb882cf99 (md5), aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d (sha1),
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae (sha256).
+CVE-2021-44228 and cve-2021-44228 again.
+`;
+  const iocs = extractIocs(blob);
+  assert.deepEqual(iocs.ipv4, ['1.2.3.4']); // deduped across defanged + plain forms
+  assert.deepEqual(iocs.ipv6.sort(), ['2001:db8::1', '::1'].sort());
+  assert.deepEqual(iocs.urls, ['http://evil-c2.example.com/gate.php', 'http://second.example.com/path']);
+  assert.deepEqual(iocs.domains, ['sub.example.org']); // URL hostnames excluded — not double-counted
+  assert.deepEqual(iocs.emails.sort(), ['soc@example.com', 'admin@example.com'].sort());
+  assert.deepEqual(iocs.md5, ['5f4dcc3b5aa765d61d8327deb882cf99']);
+  assert.deepEqual(iocs.sha1, ['aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d']);
+  assert.deepEqual(iocs.sha256, ['2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae']);
+  assert.deepEqual(iocs.cves, ['CVE-2021-44228']); // deduped case-insensitively, normalized to uppercase
+});
+
+test('ioc: extractIocs handles empty/non-string input gracefully', () => {
+  const empty = extractIocs('');
+  assert.deepEqual(empty, { ipv4: [], ipv6: [], domains: [], urls: [], emails: [], md5: [], sha1: [], sha256: [], cves: [] });
+});
+
+// ---------------------------------------------------------------------------
+// cvss.js — CVSS v3.1 Base score
+// ---------------------------------------------------------------------------
+test('cvss: AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H scores 9.8 Critical', () => {
+  const { score, severity, vector } = cvss31Base({ AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'H', I: 'H', A: 'H' });
+  assert.equal(score, 9.8);
+  assert.equal(severity, 'Critical');
+  assert.equal(vector, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
+});
+
+test('cvss: an all-None impact scores 0.0 None regardless of exploitability', () => {
+  const { score, severity } = cvss31Base({ AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'N', I: 'N', A: 'N' });
+  assert.equal(score, 0);
+  assert.equal(severity, 'None');
+});
+
+test('cvss: AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L scores 3.8 Low (verified by hand against the official FIRST.org formula)', () => {
+  // Worked by hand: ISS = 1-(1-0.22)^3 = 0.525448; Impact = 6.42*ISS = 3.373376;
+  // Exploitability = 8.22*0.55*0.44*0.27*0.62 = 0.332999; sum = 3.706375;
+  // Roundup(3.706375) = 3.8. (3.8 and 3.4 are both "Low" — either would pass
+  // a severity-only check, but the exact score must match the spec formula.)
+  const { score, severity } = cvss31Base({ AV: 'L', AC: 'H', PR: 'H', UI: 'R', S: 'U', C: 'L', I: 'L', A: 'L' });
+  assert.equal(score, 3.8);
+  assert.equal(severity, 'Low');
+});
+
+test('cvss: scope-changed AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H scores the maximum 10.0 Critical', () => {
+  const { score, severity } = cvss31Base({ AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'C', C: 'H', I: 'H', A: 'H' });
+  assert.equal(score, 10);
+  assert.equal(severity, 'Critical');
+});
+
+test('cvss: scope changes Privileges Required weighting (PR:H differs between S:U and S:C)', () => {
+  const unchanged = cvss31Base({ AV: 'N', AC: 'L', PR: 'H', UI: 'N', S: 'U', C: 'H', I: 'H', A: 'H' });
+  const changed = cvss31Base({ AV: 'N', AC: 'L', PR: 'H', UI: 'N', S: 'C', C: 'H', I: 'H', A: 'H' });
+  assert.notEqual(unchanged.score, changed.score);
+});
+
+test('cvss: cvss31Base throws on an invalid or missing metric', () => {
+  assert.throws(() => cvss31Base({ AV: 'X', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'H', I: 'H', A: 'H' }), /Invalid or missing metric/);
+  assert.throws(() => cvss31Base({ AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'H', I: 'H' }), /Invalid or missing metric/);
+});
+
+test('cvss: parseCvssVector round-trips with cvss31Base\'s own vector output', () => {
+  const { vector } = cvss31Base({ AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'H', I: 'H', A: 'H' });
+  const metrics = parseCvssVector(vector);
+  assert.deepEqual(metrics, { AV: 'N', AC: 'L', PR: 'N', UI: 'N', S: 'U', C: 'H', I: 'H', A: 'H' });
+  assert.equal(cvss31Base(metrics).score, 9.8);
+});
+
+test('cvss: parseCvssVector throws on malformed input', () => {
+  assert.throws(() => parseCvssVector('not a vector'), /Malformed vector segment/);
+  assert.throws(() => parseCvssVector('CVSS:3.1/AV:N/AC:L'), /missing required metric/);
+});
+
+test('cvss: roundup rounds up to the nearest 0.1, including exact-tenth passthrough', () => {
+  assert.equal(roundup(4.02), 4.1);
+  assert.equal(roundup(4.0), 4.0);
+  assert.equal(roundup(0), 0);
+});
+
+test('cvss: severityFor bands match the CVSS 3.1 qualitative severity table', () => {
+  assert.equal(severityFor(0), 'None');
+  assert.equal(severityFor(3.9), 'Low');
+  assert.equal(severityFor(4.0), 'Medium');
+  assert.equal(severityFor(6.9), 'Medium');
+  assert.equal(severityFor(7.0), 'High');
+  assert.equal(severityFor(8.9), 'High');
+  assert.equal(severityFor(9.0), 'Critical');
+  assert.equal(severityFor(10), 'Critical');
+});
+
+// ---------------------------------------------------------------------------
+// secret-scan.js — Shannon entropy + secret/API-key scanning
+// ---------------------------------------------------------------------------
+test('secret-scan: shannonEntropy is 0 for a uniform string and high for a random one', () => {
+  assert.equal(shannonEntropy('aaaa'), 0);
+  assert.equal(shannonEntropy(''), 0);
+  const random = shannonEntropy('xQ2!kZ9pL#vR7mN$wT4yU8bC1dE6fG0h');
+  assert.ok(random > 4.0, `expected high entropy, got ${random}`);
+});
+
+test('secret-scan: scanSecrets detects an AWS access key and a GitHub token by type and line', () => {
+  const cfg = [
+    'aws_access_key_id = AKIAIOSFODNN7EXAMPLE',
+    'github_token = ghp_16C7e42F292c6912E7710c838347Ae178B4a'
+  ].join('\n');
+  const findings = scanSecrets(cfg);
+  const aws = findings.find((f) => f.type === 'AWS Access Key ID');
+  const gh = findings.find((f) => f.type === 'GitHub Token');
+  assert.ok(aws, 'expected an AWS Access Key ID finding');
+  assert.equal(aws.line, 1);
+  assert.equal(aws.match, 'AKIA…MPLE'); // masked — full key never shown
+  assert.ok(gh, 'expected a GitHub Token finding');
+  assert.equal(gh.line, 2);
+});
+
+test('secret-scan: scanSecrets flags a private key block once, at its start line', () => {
+  const text = [
+    'preamble',
+    '-----BEGIN RSA PRIVATE KEY-----',
+    'MIIEpAIBAAKCAQEA1c7',
+    '-----END RSA PRIVATE KEY-----',
+    'trailer'
+  ].join('\n');
+  const findings = scanSecrets(text);
+  const pk = findings.filter((f) => f.type.startsWith('Private Key Block'));
+  assert.equal(pk.length, 1);
+  assert.equal(pk[0].line, 2);
+});
+
+test('secret-scan: scanSecrets does not flag a plain SHA-1 hash as an AWS secret', () => {
+  const findings = scanSecrets('sha1 = aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d');
+  assert.equal(findings.find((f) => f.type === 'AWS Secret Access Key (possible)'), undefined);
+});
+
+test('secret-scan: scanSecrets returns no findings for ordinary prose', () => {
+  assert.deepEqual(scanSecrets('This is just a normal sentence with no secrets in it.'), []);
+});
+
+test('secret-scan: describeEntropy gives a plausible read across the range', () => {
+  assert.match(describeEntropy(0), /no variation|very low/);
+  assert.match(describeEntropy(1.0), /very low/);
+  assert.match(describeEntropy(4.0), /moderate/);
+  assert.match(describeEntropy(5.5), /very high/);
 });
 

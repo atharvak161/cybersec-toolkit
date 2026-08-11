@@ -1,10 +1,10 @@
 /**
  * Tool description copy — "what it does" + "when to use it" for every
- * tool in the toolkit (56 entries, most recently +7 for the v4 Email
- * Authentication additions below).
+ * tool in the toolkit (63 entries, most recently +4 for the v5 Analysis
+ * & Intel additions below).
  * Source: docs/design/cybersec-toolkit-v3-tool-copy.md (org repo, not
  * shipped with this project) — pasted here verbatim per the v3 design
- * spec's instruction not to rewrite the substance (v4 additions follow
+ * spec's instruction not to rewrite the substance (v4/v5 additions follow
  * the same what/when convention). Keyed by tool id so every tool-*.js UI
  * module can pull its copy from one place instead of duplicating
  * description strings inline.
@@ -267,6 +267,24 @@ export const TOOL_COPY = {
   'privesc-checklist': {
     what: 'A checklist of Linux and Windows enumeration commands — SUID binaries, sudo rights, kernel version, scheduled tasks — plus links to public references like GTFOBins.',
     when: "You've got an authorized low-privilege foothold on a box, in a CTF or a pentest lab, and need the standard enumeration steps to work toward escalation without re-Googling the same commands every time."
+  },
+
+  // ---------- Section 10: Analysis & Intel ----------
+  'ioc-extractor': {
+    what: 'Pulls indicators of compromise — IPs (v4/v6), domains, URLs, emails, MD5/SHA-1/SHA-256 hashes, and CVE IDs — out of pasted text, recognizing already-defanged notation, and can defang or refang the raw text itself.',
+    when: "You've got a threat report, phishing email, or malware writeup to triage and need every IOC pulled out, categorized, and deduped for a block list or ticket, without hand-copying each one."
+  },
+  'cvss-calculator': {
+    what: 'Computes the CVSS v3.1 Base score, severity rating, and vector string from the eight base metrics, using the official FIRST.org formula exactly.',
+    when: "You're triaging a vulnerability report or writing one up and need an accurate, reproducible severity score and vector string instead of eyeballing it."
+  },
+  'secret-scanner': {
+    what: 'Scans pasted text or config for likely secrets — AWS keys, GitHub/Slack/Google API tokens, private key blocks, JWTs, and generic high-entropy strings — and reports each one masked, by type and line number.',
+    when: "You're about to commit a config file or share a log dump and want a fast local check for anything that looks like a leaked credential first."
+  },
+  'entropy-calculator': {
+    what: 'Computes the Shannon entropy of a string in bits per character and gives a plain-English read on what that entropy suggests it is.',
+    when: "You're eyeballing a string and want a quick signal for whether it's likely natural-language text, encoded data, or a high-entropy secret or key."
   }
 };
 
