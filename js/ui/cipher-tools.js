@@ -13,6 +13,7 @@
  */
 import { crackAllCiphers } from '../lib/classical-ciphers.js';
 import { enigmaProcess, ENIGMA_ROTOR_NAMES, ENIGMA_REFLECTOR_NAMES } from '../lib/enigma.js';
+import { enigmaAutoBreak, enigmaAutoBreakCost } from '../lib/enigma-break.js';
 import { el, toolHeader, clear, resultLine, showError, copyButton } from './helpers.js';
 import { TOOL_COPY } from '../data/tool-copy.js';
 
@@ -173,5 +174,172 @@ export const CIPHER_TOOLS = [
         el('div', { class: 'field-row', style: 'margin-top:6px' }, [copyButton(() => output.value)])
       ]));
     }
+  },
+
+  {
+    id: 'enigma-autobreak',
+    name: 'Enigma Auto-Break (Cryptanalysis)',
+    render(container) {
+      clear(container);
+      container.appendChild(toolHeader(TOOL_COPY['enigma-autobreak']));
+
+      // Search-depth presets trade coverage for time. All use the full I–V wheel
+      // set; the knobs are which reflector(s) to try and how many letters to
+      // score in the Phase-1 position search. Shown decrypt counts come straight
+      // from enigmaAutoBreakCost so the estimate can never drift from the engine.
+      const DEPTHS = {
+        fast: { label: 'Fast — reflector B only', reflectors: ['B'], probeLen: 120 },
+        standard: { label: 'Standard — reflectors B and C', reflectors: ENIGMA_REFLECTOR_NAMES, probeLen: 150 },
+        thorough: { label: 'Thorough — B and C, longer scoring window', reflectors: ENIGMA_REFLECTOR_NAMES, probeLen: 250 }
+      };
+
+      const input = el('textarea', {
+        rows: '4',
+        placeholder: 'Paste Enigma ciphertext (letters only matter) — e.g. the output of the Enigma simulator above',
+        style: 'width:100%; text-transform:uppercase; font-family:var(--mono, monospace)'
+      });
+      const depth = el('select', {}, Object.entries(DEPTHS).map(([k, d]) =>
+        el('option', k === 'standard' ? { value: k, selected: 'true' } : { value: k }, d.label)));
+      const estimate = el('div', { class: 'tool-desc', style: 'margin-top:6px' }, '');
+      const runBtn = el('button', { class: 'btn' }, 'Recover settings & decrypt');
+      const cancelBtn = el('button', { class: 'btn secondary', style: 'display:none' }, 'Cancel');
+      const progressWrap = el('div', { style: 'display:none; margin-top:10px' }, [
+        el('div', { class: 'cc-bar' }, [el('div', { class: 'cc-bar-fill', id: 'eb-prog' })]),
+        el('div', { class: 'tool-desc', id: 'eb-prog-label', style: 'margin-top:4px' }, '')
+      ]);
+      const progFill = progressWrap.querySelector('#eb-prog');
+      const progLabel = progressWrap.querySelector('#eb-prog-label');
+      const resultsBox = el('div', {});
+      const errorNode = el('div', {});
+
+      function currentOpts() {
+        const d = DEPTHS[depth.value];
+        return { rotorSet: ENIGMA_ROTOR_NAMES, reflectors: d.reflectors, probeLen: d.probeLen };
+      }
+      function refreshEstimate() {
+        const text = input.value.trim();
+        if (!text) { estimate.textContent = ''; return; }
+        try {
+          const cost = enigmaAutoBreakCost(text, currentOpts());
+          estimate.textContent = `Search space: ${cost.phase1Decrypts.toLocaleString()} candidate decrypts `
+            + `across ${cost.orderings} rotor orders × 26³ start positions (scoring the first `
+            + `${cost.probeChars} letters). Runs off the main thread; larger ciphertext = more reliable.`;
+        } catch { estimate.textContent = ''; }
+      }
+      input.addEventListener('input', refreshEstimate);
+      depth.addEventListener('change', refreshEstimate);
+
+      let worker = null;
+      function setRunning(on) {
+        runBtn.disabled = on;
+        runBtn.textContent = on ? 'Searching…' : 'Recover settings & decrypt';
+        cancelBtn.style.display = on ? '' : 'none';
+        progressWrap.style.display = on ? '' : 'none';
+        if (!on) { progFill.style.width = '0%'; progLabel.textContent = ''; }
+      }
+      function onProgress(p) {
+        if (p.phase === 1) {
+          const pct = p.total ? Math.min(99, Math.round((p.done / p.total) * 100)) : 0;
+          progFill.style.width = `${pct}%`;
+          progLabel.textContent = `Phase 1 — rotor order & start positions (${pct}%)`;
+        } else {
+          progFill.style.width = '99%';
+          progLabel.textContent = 'Phase 2/3 — ring settings & plugboard hill-climb…';
+        }
+      }
+      function showResult(res) {
+        clear(resultsBox);
+        const pct = confidencePercent(res.fitness);
+        const plug = res.plugboard.length ? res.plugboard.join(' ') : '(none)';
+
+        const best = el('div', { class: `card cc-best ${bandClass(res.fitness)}` }, [
+          el('div', { class: 'cc-best-label' }, `Recovered · ${res.confidenceLabel} · IoC ${res.ic.toFixed(4)}`),
+          el('div', { class: 'cc-best-text tabular-nums' }, res.plaintext),
+          el('div', { class: 'cc-bar' }, [el('div', { class: 'cc-bar-fill', style: `width:${pct}%` })]),
+          el('div', { class: 'field-row', style: 'margin-top:8px' }, [copyButton(() => res.plaintext)])
+        ]);
+        resultsBox.appendChild(best);
+
+        resultsBox.appendChild(el('div', { class: 'cc-others-h' }, 'Recovered settings'));
+        resultsBox.appendChild(el('table', { class: 'data-table' }, [
+          el('tr', {}, [el('th', {}, 'Rotor order (L→R)'), el('td', {}, res.rotors.join(' '))]),
+          el('tr', {}, [el('th', {}, 'Reflector'), el('td', {}, res.reflector)]),
+          el('tr', {}, [el('th', {}, 'Ring settings'), el('td', {}, res.ringSettings.join(''))]),
+          el('tr', {}, [el('th', {}, 'Start positions'), el('td', {}, res.positions.join(''))]),
+          el('tr', {}, [el('th', {}, 'Plugboard'), el('td', {}, plug)])
+        ]));
+
+        resultsBox.appendChild(el('div', { class: 'cc-note' }, [
+          el('strong', {}, 'How to read this: '),
+          'these settings were recovered from the ciphertext alone — no key was supplied — by ranking millions of '
+          + 'candidate decrypts on their Index of Coincidence, then hill-climbing the plugboard on English fitness. '
+          + 'Feed the recovered settings back into the simulator above to verify. Recovery is most reliable on '
+          + 'longer messages (≳120 letters) with rings at or near default; a ciphertext-only, non-default '
+          + 'Ringstellung recovery is genuinely hard and only best-effort here — that difficulty is exactly why the '
+          + 'wartime attack needed cribs and the Bombe. This models the 3-rotor Enigma I / M3 (wheels I–V, '
+          + 'reflectors B/C); the naval M4 and double-notch wheels VI–VIII are out of scope.'
+        ]));
+      }
+
+      function runSync(ciphertext, opts) {
+        // Fallback when Web Workers are unavailable: blocks the tab, so warn.
+        progLabel.textContent = 'Running without a Web Worker — the tab may be unresponsive for a while…';
+        setTimeout(() => {
+          try {
+            const res = enigmaAutoBreak(ciphertext, opts);
+            setRunning(false);
+            showResult(res);
+          } catch (err) { setRunning(false); showError(errorNode, err); }
+        }, 30);
+      }
+
+      runBtn.addEventListener('click', () => {
+        clear(errorNode);
+        clear(resultsBox);
+        const ciphertext = input.value.trim();
+        if (!ciphertext) { showError(errorNode, new Error('Paste some Enigma ciphertext first.')); return; }
+        const opts = currentOpts();
+        setRunning(true);
+
+        if (typeof Worker === 'undefined') { runSync(ciphertext, opts); return; }
+        try {
+          worker = new Worker(new URL('../lib/enigma-break-worker.js', import.meta.url), { type: 'module' });
+        } catch {
+          worker = null; runSync(ciphertext, opts); return;
+        }
+        worker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.type === 'progress') { onProgress(msg); return; }
+          if (msg.type === 'result') { setRunning(false); worker.terminate(); worker = null; showResult(msg.result); return; }
+          if (msg.type === 'error') { setRunning(false); worker.terminate(); worker = null; showError(errorNode, new Error(msg.message)); }
+        };
+        worker.onerror = (e) => { setRunning(false); if (worker) { worker.terminate(); worker = null; } showError(errorNode, new Error(e.message || 'Worker failed')); };
+        worker.postMessage({ ciphertext, options: opts });
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        if (worker) { worker.terminate(); worker = null; }
+        setRunning(false);
+        progLabel.textContent = '';
+      });
+
+      container.appendChild(el('div', { class: 'card' }, [
+        el('label', {}, 'Ciphertext'),
+        input,
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [
+          field('Search depth', depth),
+          el('div', { class: 'field-col', style: 'justify-content:flex-end' }, [runBtn, cancelBtn])
+        ]),
+        estimate,
+        progressWrap,
+        errorNode
+      ]));
+      container.appendChild(resultsBox);
+    }
   }
 ];
+
+// Shared little "label above a control" column, used by the Enigma panels.
+function field(label, node) {
+  return el('div', { class: 'field-col' }, [el('label', {}, label), node]);
+}

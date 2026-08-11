@@ -66,7 +66,11 @@ export const TOOL_COPY = {
   },
   'enigma': {
     what: 'A settings-based simulator of the WWII Enigma machine (rotors I–V, reflectors B/C, ring settings, start positions, and a plugboard). Because Enigma is its own inverse, the same settings both encrypt and decrypt.',
-    when: 'You have Enigma settings (or want to explore how the machine worked) and need to encrypt or decrypt a message. Recovering unknown settings from ciphertext alone — the job the Bombe did — is a separate, much larger problem and is not what this does.'
+    when: 'You have Enigma settings (or want to explore how the machine worked) and need to encrypt or decrypt a message. To recover unknown settings from ciphertext alone, use the Enigma Auto-Break tool below.'
+  },
+  'enigma-autobreak': {
+    what: 'Recovers Enigma settings from ciphertext ALONE — no key needed — then decrypts it. It runs the modern ciphertext-only attack (the software heir to Turing’s Bombe): it ranks every rotor order × start position by Index of Coincidence, then hill-climbs the plugboard on English fitness, and reports the recovered rotor order, ring settings, positions, plugboard, and plaintext with a confidence score. The heavy search runs in a Web Worker so the tab stays responsive, with live progress.',
+    when: 'You have Enigma-enciphered text (a CTF challenge, a puzzle, or output from the simulator above) and no key. Works best on longer messages (≳120 letters) with rings at or near default; it models the 3-rotor Enigma I / M3 (wheels I–V, reflectors B/C) — not the naval M4 or double-notch wheels VI–VIII.'
   },
   'rot13-caesar': {
     what: 'Shifts letters by a fixed amount — 13 by default (ROT13), or any shift you set.',

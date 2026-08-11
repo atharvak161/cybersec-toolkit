@@ -163,7 +163,7 @@ scanner the way a production QR library is.
 | Binary encode/decode | Working |
 | ROT13 / Caesar cipher | Working |
 | Classical Cipher Cracker (Caesar/Atbash/Vigenère/XOR/rail-fence, auto-ranked) | Working |
-| Enigma Machine (settings-based simulator) | Working |
+| Enigma Machine (settings-based simulator) | Working — ciphertext-only settings recovery added in v5, see Enigma Auto-Break |
 | MD5 / SHA-1 / SHA-256 / SHA-512 / SHA-3-256 / CRC32 (Hash Generator) | Working |
 | HMAC generator (HS1/256/384/512) | Working |
 | Hash-type identifier | Working (heuristic — many algorithms share output lengths) |
@@ -226,6 +226,12 @@ scanner the way a production QR library is.
 | DMARC Record Generator | Working — pure, no network call; validates `rua`/`ruf` as `mailto:` URIs, `pct` range, and `fo` syntax before emitting the record |
 | Domain Health Lookup (dns.google, external API, disclosed) | Working — runs the DMARC + SPF + BIMI lookups above for one domain and shows a pass/warn/fail summary; reuses their parsing logic rather than duplicating it |
 | Email Header Analyzer | Working — pure text parsing, no network; orders `Received:` hops into a delivery-path timeline (flagging >5-minute gaps) and surfaces SPF/DKIM/DMARC verdicts from `Authentication-Results`/`Received-SPF`/`DKIM-Signature`/ARC headers. Distinct from the v3 HTTP Security Headers Checker, which analyzes web response headers, not email headers |
+
+### v5 (additive, same app)
+
+| Tool | Status |
+|---|---|
+| Enigma Auto-Break (ciphertext-only cryptanalysis) | Working — recovers rotor order, start positions and plugboard from ciphertext **alone** (no key), then decrypts. Implements the modern IoC + hill-climb attack (Gillogly's method): Phase 1 ranks every rotor order × 26³ start positions by Index of Coincidence with the plugboard off; Phase 2 locally refines the ring settings; Phase 3 hill-climbs the Steckerbrett on English fitness. Runs the ~1–2M-decrypt search in a **Web Worker** with live progress (synchronous fallback if Workers are unavailable), so the tab stays responsive. Reuses the existing `enigmaProcess` simulator as its decryption primitive and the `english-fitness` scorer for ranking — no wiring is re-implemented. Scope/limits: models the 3-rotor Enigma I / M3 (wheels I–V, reflectors B/C); most reliable on messages ≳120 letters with rings at/near default; ciphertext-only recovery of a non-default Ringstellung is genuinely hard and best-effort — the same reason the wartime attack needed cribs and the Bombe. Naval M4 (4th rotor / thin reflectors) and double-notch wheels VI–VIII are not modelled. |
 
 ## Running the tests
 

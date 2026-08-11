@@ -74,6 +74,10 @@ import {
   vigenereDecrypt, vigenereEncrypt, vigenereCrack
 } from '../js/lib/classical-ciphers.js';
 import { enigmaProcess, ENIGMA_ROTOR_NAMES, ENIGMA_REFLECTOR_NAMES } from '../js/lib/enigma.js';
+import {
+  enigmaAutoBreak, enigmaAutoBreakCost, rotorOrderings,
+  hillClimbPlugboard, optimizeRings
+} from '../js/lib/enigma-break.js';
 import { extractIocs, defang, refang } from '../js/lib/ioc.js';
 import { cvss31Base, parseCvssVector, roundup, severityFor } from '../js/lib/cvss.js';
 import { scanSecrets, shannonEntropy, describeEntropy } from '../js/lib/secret-scan.js';
@@ -2348,6 +2352,91 @@ test('enigma: rejects an unknown rotor or reflector with a clear error', () => {
 test('enigma: exposes its supported rotor and reflector names', () => {
   assert.deepEqual(ENIGMA_ROTOR_NAMES, ['I', 'II', 'III', 'IV', 'V']);
   assert.deepEqual(ENIGMA_REFLECTOR_NAMES, ['B', 'C']);
+});
+
+// ============================================================
+// enigma-break.js — ciphertext-only Enigma auto-break (IoC + hill-climb)
+// ============================================================
+
+test('enigma-break: rotorOrderings yields every ordered 3-of-n permutation, all distinct', () => {
+  assert.equal(rotorOrderings(['I', 'II', 'III', 'IV', 'V']).length, 60); // P(5,3)
+  assert.equal(rotorOrderings(['I', 'II', 'III', 'IV']).length, 24);      // P(4,3)
+  const orderings = rotorOrderings(['I', 'II', 'III']);
+  assert.equal(orderings.length, 6);                                      // P(3,3) = 3!
+  // Every triple has three distinct rotors, and the list has no duplicates.
+  for (const [a, b, c] of orderings) assert.equal(new Set([a, b, c]).size, 3);
+  assert.equal(new Set(orderings.map((o) => o.join('-'))).size, orderings.length);
+});
+
+test('enigma-break: enigmaAutoBreakCost reports the Phase-1 search size and probe length', () => {
+  const cost = enigmaAutoBreakCost('X'.repeat(500), { rotorSet: ['I', 'II', 'III', 'IV', 'V'], reflectors: ['B', 'C'], probeLen: 200 });
+  assert.equal(cost.orderings, 60);
+  assert.equal(cost.phase1Decrypts, 2 * 60 * 26 * 26 * 26); // reflectors x P(5,3) x 26^3
+  assert.equal(cost.probeChars, 200);                        // capped below the 500 available
+  const full = enigmaAutoBreakCost('X'.repeat(40), { probeLen: 0 });
+  assert.equal(full.probeChars, 40);                         // probeLen 0 = use the whole text
+});
+
+test('enigma-break: rejects ciphertext too short to analyse', () => {
+  assert.throws(() => enigmaAutoBreak('ABCDE'), /too short/i);
+});
+
+test('enigma-break: hillClimbPlugboard recovers the plugboard once rotors/positions are known', () => {
+  // Correct rotor order + positions are fixed here; only the plugboard is unknown.
+  const plain = 'THEGENERALORDERSALLUNITSTOADVANCEATFIRSTLIGHTANDHOLDTHERIVERCROSSINGUNTILRELIEVED';
+  const trueSettings = { rotors: ['I', 'III', 'II'], reflector: 'B', positions: ['D', 'O', 'G'], plugboard: ['QW', 'ER', 'TY'] };
+  const cipher = enigmaProcess(plain, trueSettings);
+  const base = { rotors: ['I', 'III', 'II'], reflector: 'B', positions: ['D', 'O', 'G'], ringSettings: ['A', 'A', 'A'] };
+  const { plugboard, score } = hillClimbPlugboard(lettersOnly(cipher), base, scoreEnglish, 10);
+  const recovered = enigmaProcess(cipher, { ...base, plugboard });
+  assert.equal(lettersOnly(recovered), lettersOnly(plain));
+  assert.ok(score > 0.4, `expected a confident English fitness, got ${score}`);
+  // The three true pairs must all be present (order within/among pairs is irrelevant).
+  const norm = (p) => p.split('').sort().join('');
+  const got = new Set(plugboard.map(norm));
+  for (const pair of ['QW', 'ER', 'TY']) assert.ok(got.has(norm(pair)), `missing plug ${pair}`);
+});
+
+test('enigma-break: optimizeRings never degrades a correct default-ring candidate', () => {
+  const plain = 'MEETMEATTHEOLDBRIDGEWHENTHECLOCKTOWERCHIMESMIDNIGHTANDBRINGTHEDOCUMENTS';
+  const settings = { rotors: ['V', 'II', 'IV'], reflector: 'C', positions: ['A', 'B', 'C'], ringSettings: ['A', 'A', 'A'] };
+  const cipher = enigmaProcess(plain, settings);
+  const base = { rotors: ['V', 'II', 'IV'], reflector: 'C', positions: ['A', 'B', 'C'], ringSettings: ['A', 'A', 'A'] };
+  const before = scoreEnglish(enigmaProcess(cipher, base));
+  const { ringSettings, score } = optimizeRings(lettersOnly(cipher), base, scoreEnglish);
+  assert.ok(score >= before - 1e-9, 'ring search must not lower the fitness of an already-correct config');
+  // The already-correct decrypt uses default rings, so the search should keep them.
+  const stillCorrect = enigmaProcess(cipher, { ...base, ringSettings });
+  assert.equal(lettersOnly(stillCorrect), lettersOnly(plain));
+});
+
+test('enigma-break: recovers the plaintext from ciphertext ALONE — unknown rotor order, start positions, and plugboard', () => {
+  // Known-plaintext round trip: encrypt with a secret key, then hand ONLY the
+  // ciphertext to the auto-break and require the original plaintext back. This
+  // exercises the whole pipeline: rotor-order search, 26^3 start-position search,
+  // ring refinement, and the plugboard hill-climb — no key given.
+  const plain = 'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG WHILE THE NATION WATCHES THE WAR '
+    + 'UNFOLD ACROSS THE WIRELESS EVERY SINGLE EVENING AND THE OPERATORS COPY EACH MESSAGE';
+  const secret = { rotors: ['II', 'IV', 'V'], reflector: 'B', positions: ['M', 'C', 'K'], plugboard: ['AB', 'CD', 'EF'] };
+  const cipher = enigmaProcess(plain, secret);
+  assert.notEqual(lettersOnly(cipher), lettersOnly(plain));
+
+  // rotorSet is the three true wheels (6 orderings) and one reflector, to keep
+  // this deterministic test to a few seconds. The full 5-wheel / both-reflector
+  // search (P(5,3) x 2 x 26^3 decrypts) recovers the same key and plaintext but
+  // takes ~1.5 min in Node — too slow for the unit suite; run it via the Web
+  // Worker in the UI. Only the SEARCH SPACE is narrowed here, not the algorithm:
+  // it still discovers the rotor ORDER, all start positions, and the plugboard.
+  const res = enigmaAutoBreak(cipher, { rotorSet: ['II', 'IV', 'V'], reflectors: ['B'], probeLen: 120 });
+
+  assert.equal(lettersOnly(res.plaintext), lettersOnly(plain), `recovered: ${lettersOnly(res.plaintext).slice(0, 80)}`);
+  assert.deepEqual(res.rotors, ['II', 'IV', 'V']);
+  assert.deepEqual(res.positions, ['M', 'C', 'K']);
+  assert.ok(res.fitness > 0.45, `expected high English fitness, got ${res.fitness}`);
+  assert.equal(res.confidenceLabel, 'High confidence');
+  const norm = (p) => p.split('').sort().join('');
+  const plugs = new Set(res.plugboard.map(norm));
+  for (const pair of ['AB', 'CD', 'EF']) assert.ok(plugs.has(norm(pair)), `missing plug ${pair}`);
 });
 
 // ============================================================
