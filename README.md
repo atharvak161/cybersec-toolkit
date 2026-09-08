@@ -171,7 +171,7 @@ scanner the way a production QR library is.
 | JWT decoder/inspector (flags `alg:none`, expiry, optional HMAC verify) | Working |
 | AES-GCM encrypt/decrypt (Web Crypto, PBKDF2-derived key) | Working |
 | RSA keypair generation + encrypt/decrypt (Web Crypto, RSA-OAEP) | Working |
-| Recipe chaining (CyberChef-lite, drag-to-reorder, live output) | Working — the standout feature |
+| Recipe chaining (CyberChef-lite, drag-to-reorder, live output) | Working — the standout feature. 55 operations across 8 categories, searchable, with per-operation parameters |
 | Password strength / entropy analyzer | Working |
 | HIBP breach check (k-anonymity, external API, disclosed) | Working |
 | EXIF metadata viewer/stripper | Working |

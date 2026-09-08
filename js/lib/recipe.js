@@ -17,6 +17,13 @@ import * as enc from './encoding.js';
 import * as encExtra from './encoding-extra.js';
 import * as hashing from './hashing.js';
 import { rot13, caesarShift } from './encoding.js';
+import { atbash, vigenereEncrypt, vigenereDecrypt, railFenceDecrypt } from './classical-ciphers.js';
+import { morseEncode, morseDecode } from './morse.js';
+import { defang, refang, extractIocs } from './ioc.js';
+import { formatJson, formatXml, formatYaml } from './format-data.js';
+import { epochSecondsToIso, epochMillisToIso, autoDetectEpoch } from './epoch.js';
+import { shannonEntropy, describeEntropy } from './secret-scan.js';
+import { decodeJwt } from './jwt.js';
 
 export const OPERATIONS = [
   { id: 'to-hex', name: 'To Hex', category: 'Encoding', run: (input) => enc.hexEncode(input) },
@@ -57,8 +64,118 @@ export const OPERATIONS = [
   { id: 'uppercase', name: 'To Uppercase', category: 'Misc', run: (input) => input.toUpperCase() },
   { id: 'lowercase', name: 'To Lowercase', category: 'Misc', run: (input) => input.toLowerCase() },
   { id: 'reverse', name: 'Reverse', category: 'Misc', run: (input) => input.split('').reverse().join('') },
-  { id: 'trim', name: 'Trim Whitespace', category: 'Misc', run: (input) => input.trim() }
+  { id: 'trim', name: 'Trim Whitespace', category: 'Misc', run: (input) => input.trim() },
+
+  // ── Encoding (added) ──────────────────────────────────────────────
+  { id: 'to-uu', name: 'To UUEncode', category: 'Encoding', run: (input) => encExtra.uuEncode(input) },
+  { id: 'from-uu', name: 'From UUEncode', category: 'Encoding', run: (input) => encExtra.uuDecode(input) },
+  { id: 'to-morse', name: 'To Morse Code', category: 'Encoding', run: (input) => morseEncode(input) },
+  { id: 'from-morse', name: 'From Morse Code', category: 'Encoding', run: (input) => morseDecode(input) },
+
+  // ── Classical ciphers ─────────────────────────────────────────────
+  { id: 'atbash', name: 'Atbash Cipher', category: 'Ciphers', run: (input) => atbash(input) },
+  {
+    id: 'vigenere-encrypt',
+    name: 'Vigenere Encrypt',
+    category: 'Ciphers',
+    params: { key: 'KEY' },
+    run: (input, params = {}) => vigenereEncrypt(input, params.key || 'KEY')
+  },
+  {
+    id: 'vigenere-decrypt',
+    name: 'Vigenere Decrypt',
+    category: 'Ciphers',
+    params: { key: 'KEY' },
+    run: (input, params = {}) => vigenereDecrypt(input, params.key || 'KEY')
+  },
+  {
+    id: 'rail-fence-decrypt',
+    name: 'Rail Fence Decrypt',
+    category: 'Ciphers',
+    params: { rails: 3 },
+    run: (input, params = {}) => railFenceDecrypt(input, Number(params.rails) || 3)
+  },
+
+  // ── Threat intel / IOC ────────────────────────────────────────────
+  { id: 'defang', name: 'Defang IOCs', category: 'Threat Intel', run: (input) => defang(input) },
+  { id: 'refang', name: 'Refang IOCs', category: 'Threat Intel', run: (input) => refang(input) },
+  {
+    id: 'extract-iocs',
+    name: 'Extract IOCs',
+    category: 'Threat Intel',
+    run: (input) => {
+      const r = extractIocs(input);
+      return Object.entries(r)
+        .filter(([, v]) => v.length)
+        .map(([k, v]) => `${k} (${v.length}):\n  ${v.join('\n  ')}`)
+        .join('\n\n') || 'No indicators found.';
+    }
+  },
+
+  // ── Data formatting ───────────────────────────────────────────────
+  {
+    id: 'format-json',
+    name: 'Beautify JSON',
+    category: 'Data Format',
+    params: { indent: 2 },
+    run: (input, params = {}) => formatJson(input, Number(params.indent) || 2)
+  },
+  { id: 'minify-json', name: 'Minify JSON', category: 'Data Format', run: (input) => JSON.stringify(JSON.parse(input)) },
+  { id: 'format-xml', name: 'Beautify XML', category: 'Data Format', run: (input) => formatXml(input) },
+  { id: 'format-yaml', name: 'Beautify YAML', category: 'Data Format', run: (input) => formatYaml(input) },
+
+  // ── Timestamps ────────────────────────────────────────────────────
+  { id: 'epoch-auto', name: 'Epoch to ISO (auto)', category: 'Timestamps', run: (input) => { const r = autoDetectEpoch(input.trim()); return `${r.iso}  (detected: ${r.unit})`; } },
+  { id: 'epoch-seconds', name: 'Epoch Seconds to ISO', category: 'Timestamps', run: (input) => epochSecondsToIso(Number(input.trim())) },
+  { id: 'epoch-millis', name: 'Epoch Millis to ISO', category: 'Timestamps', run: (input) => epochMillisToIso(Number(input.trim())) },
+
+  // ── Analysis ──────────────────────────────────────────────────────
+  {
+    id: 'identify-hash',
+    name: 'Identify Hash',
+    category: 'Analysis',
+    run: (input) => identifyHashLines(input)
+  },
+  {
+    id: 'entropy',
+    name: 'Shannon Entropy',
+    category: 'Analysis',
+    run: (input) => { const e = shannonEntropy(input); return `${e.toFixed(4)} bits/char — ${describeEntropy(e)}`; }
+  },
+  {
+    id: 'decode-jwt',
+    name: 'Decode JWT',
+    category: 'Analysis',
+    run: (input) => { const j = decodeJwt(input.trim()); return JSON.stringify({ header: j.header, payload: j.payload }, null, 2); }
+  },
+
+  // ── HMAC ──────────────────────────────────────────────────────────
+  {
+    id: 'hmac-sha256',
+    name: 'HMAC-SHA256',
+    category: 'Hashing',
+    params: { key: 'secret' },
+    run: (input, params = {}) => {
+      const key = params.key ?? '';
+      if (!key) throw new Error('HMAC requires a non-empty key');
+      return hashing.hmacHex('SHA-256', key, input);
+    }
+  },
+
+  // ── Misc (added) ──────────────────────────────────────────────────
+  { id: 'strip-whitespace', name: 'Remove All Whitespace', category: 'Misc', run: (input) => input.replace(/\s+/g, '') },
+  { id: 'unique-lines', name: 'Unique Lines', category: 'Misc', run: (input) => [...new Set(input.split('\n'))].join('\n') },
+  { id: 'sort-lines', name: 'Sort Lines', category: 'Misc', run: (input) => input.split('\n').sort().join('\n') },
+  { id: 'reverse-lines', name: 'Reverse Line Order', category: 'Misc', run: (input) => input.split('\n').reverse().join('\n') },
+  { id: 'count', name: 'Count Chars / Words / Lines', category: 'Misc', run: (input) => `chars: ${input.length}\nwords: ${input.trim() ? input.trim().split(/\s+/).length : 0}\nlines: ${input.split('\n').length}` }
 ];
+
+/** identifyHash returns an array of {algorithm, confidence}; render it. */
+function identifyHashLines(input) {
+  const res = hashing.identifyHash(input.trim());
+  if (!res || !res.length) return 'No candidate algorithms found.';
+  return res.map((r) => `${r.algorithm}  (confidence: ${r.confidence})`).join('\n');
+}
 
 export function getOperation(id) {
   const op = OPERATIONS.find((o) => o.id === id);

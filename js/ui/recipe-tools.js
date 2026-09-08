@@ -1,7 +1,7 @@
 import { OPERATIONS, runRecipe, exportRecipe, importRecipe, buildShareableUrl, parseShareableUrl } from '../lib/recipe.js';
 import { el, toolHeader, clear, showError, copyButton } from './helpers.js';
 
-const CATEGORY_ORDER = ['Encoding', 'Hashing', 'Misc'];
+const CATEGORY_ORDER = ['Encoding', 'Ciphers', 'Hashing', 'Data Format', 'Threat Intel', 'Timestamps', 'Analysis', 'Misc'];
 
 function groupByCategory() {
   const groups = {};
@@ -79,13 +79,28 @@ export const RECIPE_TOOL = {
         row.appendChild(el('span', { class: 'drag-handle' }, '⠿'));
         row.appendChild(el('span', { class: 'step-name' }, `${index + 1}. ${op.name}`));
 
-        if (op.id === 'caesar') {
-          const shiftInput = el('input', { type: 'number', value: String(step.params.shift ?? 3) });
-          shiftInput.addEventListener('input', () => {
-            step.params.shift = parseInt(shiftInput.value, 10) || 0;
-            execute();
-          });
-          row.appendChild(el('span', { class: 'step-params' }, [shiftInput]));
+        // Generic param editor: renders an input for every param the
+        // operation declares, typed from its default value. Adding a new
+        // operation with params needs no UI change here.
+        if (op.params && Object.keys(op.params).length) {
+          const paramNodes = [];
+          for (const [key, def] of Object.entries(op.params)) {
+            const isNum = typeof def === 'number';
+            const field = el('input', {
+              type: isNum ? 'number' : 'text',
+              class: 'step-param-input',
+              title: key,
+              placeholder: key,
+              value: String(step.params[key] ?? def)
+            });
+            field.addEventListener('input', () => {
+              step.params[key] = isNum ? (parseInt(field.value, 10) || 0) : field.value;
+              execute();
+            });
+            paramNodes.push(el('label', { class: 'step-param-label' }, key));
+            paramNodes.push(field);
+          }
+          row.appendChild(el('span', { class: 'step-params' }, paramNodes));
         }
 
         const removeBtn = el('button', { class: 'remove-step' }, '✕');
@@ -134,17 +149,37 @@ export const RECIPE_TOOL = {
 
     // ---------- Operation picker ----------
     const picker = el('div', { class: 'op-picker' });
-    const groups = groupByCategory();
-    const allCategories = [...CATEGORY_ORDER, ...Object.keys(groups).filter((c) => !CATEGORY_ORDER.includes(c))];
-    for (const category of allCategories) {
-      if (!groups[category]) continue;
-      picker.appendChild(el('div', { class: 'op-picker-category' }, category));
-      for (const op of groups[category]) {
-        const btn = el('button', { class: 'op-picker-item' }, `+ ${op.name}`);
-        btn.addEventListener('click', () => addStep(op.id));
-        picker.appendChild(btn);
+    const opSearch = el('input', {
+      type: 'search', class: 'op-search',
+      placeholder: `Search ${OPERATIONS.length} operations\u2026`, 'aria-label': 'Search operations'
+    });
+    const opCount = el('div', { class: 'op-count' }, `${OPERATIONS.length} operations`);
+
+    function renderPicker(filter = '') {
+      clear(picker);
+      const q = filter.trim().toLowerCase();
+      const groups = groupByCategory();
+      const allCategories = [...CATEGORY_ORDER, ...Object.keys(groups).filter((c) => !CATEGORY_ORDER.includes(c))];
+      let shown = 0;
+      for (const category of allCategories) {
+        if (!groups[category]) continue;
+        const matches = groups[category].filter(
+          (op) => !q || op.name.toLowerCase().includes(q) || op.id.includes(q) || category.toLowerCase().includes(q)
+        );
+        if (!matches.length) continue;
+        picker.appendChild(el('div', { class: 'op-picker-category' }, category));
+        for (const op of matches) {
+          const btn = el('button', { class: 'op-picker-item', title: op.id }, `+ ${op.name}`);
+          btn.addEventListener('click', () => addStep(op.id));
+          picker.appendChild(btn);
+          shown++;
+        }
       }
+      opCount.textContent = q ? `${shown} of ${OPERATIONS.length} operations` : `${OPERATIONS.length} operations`;
+      if (!shown) picker.appendChild(el('p', { class: 'tool-desc' }, `No operation matches \u201c${filter}\u201d.`));
     }
+    opSearch.addEventListener('input', () => renderPicker(opSearch.value));
+    renderPicker();
 
     input.addEventListener('input', () => execute());
 
@@ -174,7 +209,7 @@ export const RECIPE_TOOL = {
     renderSteps();
 
     container.appendChild(el('div', { class: 'recipe-layout' }, [
-      el('div', { class: 'card' }, [el('h3', { style: 'margin-top:0' }, 'Operations'), picker]),
+      el('div', { class: 'card' }, [el('h3', { style: 'margin-top:0' }, 'Operations'), opSearch, opCount, picker]),
       el('div', {}, [
         el('div', { class: 'card' }, [
           el('label', {}, 'Input'), input,

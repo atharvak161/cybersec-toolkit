@@ -645,13 +645,51 @@ test('recipe: failing step throws with a trace attached', async () => {
   );
 });
 
-test('recipe: every registered operation is runnable on a trivial input', async () => {
-  // Sanity sweep: make sure no operation in the catalog throws unexpectedly
-  // on reasonable input (encoding ops on plain text, hash ops on plain text).
+// Operations that need structurally valid input rather than arbitrary text
+// (you cannot beautify JSON that isn't JSON, or decode a JWT from "abc").
+// Every operation must appear here or accept plain text — the coverage test
+// below fails if a new operation is added without deciding which it is.
+const OP_SAMPLE_INPUT = {
+  'format-json': '{"a":1}',
+  'minify-json': '{"a": 1}',
+  'format-xml': '<a><b>1</b></a>',
+  'format-yaml': 'a: 1',
+  'epoch-auto': '1725840000',
+  'epoch-seconds': '1725840000',
+  'epoch-millis': '1725840000000',
+  'identify-hash': '5d41402abc4b2a76b9719d911017c592',
+  'decode-jwt': 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig',
+  'rail-fence-decrypt': 'Hoo!lHl el'
+};
+
+test('recipe: every registered operation is runnable on appropriate input', async () => {
+  // Sanity sweep across the whole catalog. Decode ops are covered by the
+  // round-trip tests above; everything else must run and return a string.
   for (const op of OPERATIONS) {
-    if (op.id.startsWith('from-')) continue; // decode ops need matching-format input, tested individually above
-    const result = await op.run('abc', op.params || {});
+    if (op.id.startsWith('from-')) continue;
+    const input = OP_SAMPLE_INPUT[op.id] ?? 'abc';
+    const result = await op.run(input, op.params || {});
     assert.equal(typeof result, 'string', `${op.id} should return a string`);
+    assert.ok(result.length > 0, `${op.id} should return a non-empty string`);
+  }
+});
+
+test('recipe: operation catalog is internally consistent', () => {
+  const ids = new Set();
+  for (const op of OPERATIONS) {
+    assert.ok(op.id && typeof op.id === 'string', 'every operation needs an id');
+    assert.ok(!ids.has(op.id), `duplicate operation id: ${op.id}`);
+    ids.add(op.id);
+    assert.ok(op.name, `${op.id} needs a display name`);
+    assert.ok(op.category, `${op.id} needs a category`);
+    assert.equal(typeof op.run, 'function', `${op.id} needs a run function`);
+    if (op.params) {
+      assert.equal(typeof op.params, 'object', `${op.id} params must be an object`);
+      for (const [k, v] of Object.entries(op.params)) {
+        assert.ok(['string', 'number'].includes(typeof v),
+          `${op.id} param "${k}" must default to a string or number so the UI can type its input`);
+      }
+    }
   }
 });
 

@@ -528,7 +528,7 @@ label {
   margin-bottom: 4px;
 }
 
-textarea, input[type="text"], input[type="number"], input[type="password"], select {
+textarea, input[type="text"], input[type="number"], input[type="password"], input[type="search"], input[type="email"], input[type="url"], select {
   width: 100%;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -543,6 +543,13 @@ textarea, input[type="text"], input[type="number"], input[type="password"], sele
 textarea:focus, input:focus, select:focus {
   outline: none;
   border-color: var(--accent-dim);
+}
+
+/* Chromium renders the search clear button dark-on-dark; invert it so it
+   stays visible against the input background. */
+input[type="search"]::-webkit-search-cancel-button {
+  filter: invert(0.7);
+  cursor: pointer;
 }
 
 /* Accessibility floor (v3): every interactive element gets an explicit,
@@ -703,15 +710,34 @@ table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
 }
 
 .op-picker {
-  max-height: 480px;
+  max-height: 520px;
   overflow-y: auto;
+  scrollbar-width: thin;
+}
+.op-search {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.op-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
 }
 .op-picker-category {
   font-size: 11px;
   text-transform: uppercase;
+  letter-spacing: .06em;
   color: var(--text-dim);
   margin: 10px 0 4px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, var(--bg));
+  padding: 4px 0 3px;
+  z-index: 1;
+  border-bottom: 1px solid var(--border);
 }
+.op-picker-category:first-child { margin-top: 0; }
 .op-picker-item {
   display: block;
   width: 100%;
@@ -747,10 +773,27 @@ table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
 .recipe-step.dragging { opacity: 0.4; }
 .recipe-step .drag-handle { color: var(--text-dim); cursor: grab; }
 .recipe-step .step-name { flex: 1; font-size: 13px; }
+.recipe-step .step-params {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.recipe-step .step-param-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text-dim);
+}
 .recipe-step .step-params input {
-  width: 70px;
+  width: 92px;
   padding: 3px 6px;
   font-size: 12px;
+}
+.recipe-step .step-params input[type="number"] { width: 62px; }
+@media (max-width: 640px) {
+  .recipe-step { flex-wrap: wrap; }
+  .recipe-step .step-name { flex-basis: 100%; }
 }
 .recipe-step .remove-step {
   background: none;
