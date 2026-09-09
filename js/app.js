@@ -13,6 +13,7 @@ import { CIPHER_TOOLS } from './ui/cipher-tools.js';
 import { HASHING_TOOLS } from './ui/hashing-tools.js';
 import { CRYPTO_TOOLS } from './ui/crypto-tools.js';
 import { RECIPE_TOOL } from './ui/recipe-tools.js';
+import { CYBERCHEF_TOOL } from './ui/cyberchef-tools.js';
 import { AUTO_DECODE_TOOLS } from './ui/auto-decode-tools.js';
 import { PASSWORD_TOOLS } from './ui/password-tools.js';
 import { FILES_TOOLS } from './ui/files-tools.js';
@@ -65,7 +66,7 @@ function recentToolIds(limit) {
 // entirely — each is a cross-cutting "meta tool" (chains other tools /
 // auto-tries every decoder in the toolkit) rather than a peer of a single
 // codec belonging to one category.
-const PINNED_CATEGORY = { name: 'Recipe Builder', slug: 'recipe-builder', tools: [RECIPE_TOOL, ...AUTO_DECODE_TOOLS] };
+const PINNED_CATEGORY = { name: 'Recipe Builder', slug: 'recipe-builder', tools: [RECIPE_TOOL, CYBERCHEF_TOOL, ...AUTO_DECODE_TOOLS] };
 
 const CATEGORIES = [
   {

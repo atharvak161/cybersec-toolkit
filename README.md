@@ -171,7 +171,8 @@ scanner the way a production QR library is.
 | JWT decoder/inspector (flags `alg:none`, expiry, optional HMAC verify) | Working |
 | AES-GCM encrypt/decrypt (Web Crypto, PBKDF2-derived key) | Working |
 | RSA keypair generation + encrypt/decrypt (Web Crypto, RSA-OAEP) | Working |
-| Recipe chaining (CyberChef-lite, drag-to-reorder, live output) | Working — the standout feature. 55 operations across 8 categories, searchable, with per-operation parameters |
+| Recipe chaining (own engine, drag-to-reorder, live output) | Working — 55 operations across 8 categories, searchable, with per-operation parameters |
+| CyberChef Operations (505) | Working — CyberChef's own unmodified core, bundled to run locally under this toolkit's interface. Lazy-loaded (23 MB) so it never slows page load. See `js/vendor/CYBERCHEF-NOTICE.txt` |
 | Password strength / entropy analyzer | Working |
 | HIBP breach check (k-anonymity, external API, disclosed) | Working |
 | EXIF metadata viewer/stripper | Working |
@@ -259,3 +260,12 @@ before/after output for eyeballing.
 Not part of this build phase. This is a static site with no server-side
 requirements — deploying it (GitHub Pages or any static host) is a
 separate, later step.
+
+## Third-party licences
+
+This toolkit bundles the core of [CyberChef](https://github.com/gchq/CyberChef)
+(v11.4.0) — Crown Copyright, licensed under the Apache Licence 2.0. Its 505
+operations run unmodified; only the surrounding interface is this project's.
+
+Full licence: `js/vendor/CYBERCHEF-LICENSE.txt`
+Attribution and statement of build-time changes: `js/vendor/CYBERCHEF-NOTICE.txt`

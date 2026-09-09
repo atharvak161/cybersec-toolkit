@@ -25,8 +25,25 @@ export function hexEncode(input) {
   return out;
 }
 
+/**
+ * Strip the delimiters real-world hex actually arrives with, so a paste from
+ * a memory dump, an openssl fingerprint, a MAC address, a C byte array or a
+ * shellcode string decodes without hand-cleaning first.
+ *
+ * Handles: whitespace/newlines, 0x prefixes (leading or per-byte), \x escapes,
+ * %-encoding, and , ; : - _ | separators.
+ */
+function stripHexDelimiters(hex) {
+  return hex
+    .trim()
+    .replace(/0x/gi, '')      // 0x48 0x65  and  0x4865
+    .replace(/\\x/gi, '')     // \x48\x65 shellcode
+    .replace(/%/g, '')        // %48%65 percent-encoding
+    .replace(/[\s,;:\-_|]+/g, ''); // whitespace and common separators
+}
+
 export function hexDecode(hex, asBytes = false) {
-  const clean = hex.trim().replace(/\s+/g, '').replace(/^0x/i, '');
+  const clean = stripHexDelimiters(hex);
   if (clean.length % 2 !== 0) throw new Error('Hex string must have an even number of digits');
   if (!/^[0-9a-fA-F]*$/.test(clean)) throw new Error('Invalid hex characters');
   const bytes = new Uint8Array(clean.length / 2);
@@ -195,8 +212,22 @@ export function urlEncode(str) {
   return encodeURIComponent(str);
 }
 
-export function urlDecode(str) {
-  return decodeURIComponent(str);
+/**
+ * Decode a URL-encoded string. `plusAsSpace` (default true) treats "+" as a
+ * space, which is how application/x-www-form-urlencoded bodies and query
+ * strings encode spaces — the form you actually meet when testing web apps.
+ * Pass false for path segments, where "+" is a literal plus.
+ */
+export function urlDecode(str, plusAsSpace = true) {
+  const prepared = plusAsSpace ? str.replace(/\+/g, ' ') : str;
+  try {
+    return decodeURIComponent(prepared);
+  } catch {
+    // Tolerate stray % that isn't a valid escape (common in log lines and
+    // half-encoded payloads) rather than failing the whole decode.
+    return prepared.replace(/%(?![0-9a-fA-F]{2})/g, '%25')
+      .replace(/%[0-9a-fA-F]{2}/g, (m) => decodeURIComponent(m));
+  }
 }
 
 // ---------- Binary (8-bit groups) ----------
@@ -207,7 +238,23 @@ export function binaryEncode(input) {
 }
 
 export function binaryDecode(input, asBytes = false) {
-  const groups = input.trim().split(/\s+/).filter(Boolean);
+  const trimmed = input.trim();
+  if (!trimmed) return asBytes ? new Uint8Array(0) : '';
+
+  // Delimited form ("01001000 01101001", or comma/pipe separated).
+  let groups = trimmed.split(/[\s,;|]+/).filter(Boolean);
+
+  // Undelimited form ("0100100001101001") — one long run of bits. Split it
+  // into bytes from the left, which is how a straight paste is meant to read.
+  if (groups.length === 1 && groups[0].length > 8) {
+    const bits = groups[0];
+    if (!/^[01]+$/.test(bits)) throw new Error('Invalid binary group: ' + bits);
+    if (bits.length % 8 !== 0) {
+      throw new Error(`Undelimited binary must be a multiple of 8 bits (got ${bits.length})`);
+    }
+    groups = bits.match(/.{8}/g);
+  }
+
   const bytes = new Uint8Array(groups.length);
   for (let i = 0; i < groups.length; i++) {
     if (!/^[01]{1,8}$/.test(groups[i])) throw new Error('Invalid binary group: ' + groups[i]);

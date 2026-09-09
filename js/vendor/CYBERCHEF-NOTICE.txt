@@ -1,0 +1,35 @@
+CyberChef
+Copyright 2016-2026 Crown Copyright
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+Source: https://github.com/gchq/CyberChef  (version 11.4.0)
+
+WHAT IS INCLUDED
+  js/vendor/cyberchef-core.js is a browser bundle of CyberChef's CORE only:
+  its 505 operations, the Chef/Recipe/Dish engine, and the generated
+  OperationConfig. CyberChef's own user interface is NOT included.
+
+STATEMENT OF CHANGES (Apache-2.0 section 4b)
+  The operation logic is unmodified. The following build-time changes were
+  made solely to produce a browser bundle with esbuild rather than webpack:
+
+  1. src/core/vendor/gost/gost{Digest,Sign,Crypto,Cipher}.mjs
+     Removed the line `GostRandom = GostRandom || root.GostRandom;`, which
+     reassigns an imported binding. The import is always defined in a bundle
+     and the following line repeats the same `(GostRandom || root.GostRandom)`
+     guard, so behaviour is unchanged. Webpack permits the reassignment;
+     esbuild rejects it as an immutable-binding error.
+
+  2. @blu3r4y/lzma resolved to its ESM build (src/lzma_worker.mjs) instead of
+     its CommonJS entry, which performs a dynamic require() that cannot be
+     statically bundled. Both expose the same compress/decompress functions.
+
+  3. Node built-ins polyfilled using the same substitutions CyberChef's own
+     webpack config declares (webpack.config.js lines 122-137): assert,
+     buffer, crypto-browserify, events, path, stream-browserify, url,
+     browserify-zlib. child_process, fs, net, tls and vm resolve to empty
+     modules, as in the upstream config.
+
+  No operation source was otherwise altered. Verified against published test
+  vectors: RFC 4648 (Base16/32/64), FIPS 180-4 (SHA-1/2/3), RFC 1321 (MD5).

@@ -1156,3 +1156,45 @@ table.data-table td, table.data-table th { font-variant-numeric: tabular-nums; }
 .cvss-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .cvss-field { display: flex; flex-direction: column; gap: 4px; }
 .cvss-field label { font-size: var(--text-xs); color: var(--text-dim); }
+
+/* ── CyberChef operations panel ──────────────────────────────────────── */
+.cc-status {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+}
+.cc-status-ready { border-color: var(--accent-dim); color: var(--text); }
+.cc-status-error { border-color: var(--danger); color: var(--danger); }
+
+.cc-step { flex-wrap: wrap; gap: 6px 10px; align-items: flex-end; }
+.cc-step .step-name { flex-basis: 100%; font-weight: 600; }
+.cc-arg-wrap { display: inline-flex; flex-direction: column; gap: 2px; }
+.cc-arg-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-dim); margin: 0;
+}
+.cc-arg { width: 140px; padding: 3px 6px; font-size: 12px; }
+.cc-arg[type="checkbox"] { width: auto; }
+.cc-arg-toggle { width: 88px; }
+.cc-step-actions { margin-left: auto; display: inline-flex; gap: 2px; align-items: center; }
+.cc-move {
+  background: none; border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: var(--radius); cursor: pointer; font-size: 11px;
+  min-width: 24px; min-height: 24px; line-height: 1;
+}
+.cc-move:hover { border-color: var(--accent-dim); color: var(--text); }
+.cc-trace-fail { color: var(--danger); font-size: 12px; }
+/* A `1fr` grid track floors at min-content, so one long operation name can
+   push the whole card wider than the viewport. min-width:0 lets it shrink. */
+.recipe-layout > * { min-width: 0; }
+.op-picker-item, .cc-status, .op-picker-category { overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .cc-arg { width: 100%; }
+  .cc-arg-wrap { flex-basis: 100%; }
+  .cc-step-actions { margin-left: 0; }
+}
