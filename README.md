@@ -188,7 +188,7 @@ input leaves the tab.
   entry point plus 9 collapsible category groups — Encoding & Ciphers,
   Hashing & Integrity, Cryptography, Passwords & Credential Safety, Files
   & Metadata, Network & Recon, Email Authentication, Developer Utilities,
-  and Pentest & CTF Reference (10 sections total, 58 tools). Each category has its own
+  and Pentest & CTF Reference. Each category has its own
   section landing page (an intro blurb plus a card grid of its tools),
   collapsible/expandable group state persisted to `localStorage`, and a
   quick-search box (press `/`) that filters across all tools by name. The
