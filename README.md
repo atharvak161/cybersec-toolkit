@@ -77,6 +77,111 @@ Lookup — no new external host was introduced to build them.
 
 ## Architecture
 
+### Layers
+
+```
+  index.html
+      │  <script type="module" src="js/app.js">
+      ▼
+  js/app.js ──────────── navigation, category registry, URL-hash routing,
+      │                  quick-search, collapsible group state (localStorage)
+      │
+      ├──▶ js/ui/*.js         17 modules — the ONLY layer that touches the DOM
+      │        │              one per category: encoding, hashing, crypto,
+      │        │              password, files, network, email, dev, pentest,
+      │        │              analysis, recipe, cyberchef, auto-decode …
+      │        ▼
+      └──▶ js/lib/*.js        45 modules — pure functions, zero DOM
+               │              aes · rsa · jwt · x509 · hashing · enigma ·
+               │              cvss · secret-scan · steganography · exif ·
+               │              ioc · email-auth · qr · totp · cidr · …
+               ▼
+          js/lib/vendor/      hand-written from published specs:
+                              md5 (RFC 1321) · sha3 (FIPS 202) ·
+                              crc32 (ISO-HDLC) · punycode (RFC 3492)
+```
+
+**The `lib` / `ui` split is the whole design.** Everything in `js/lib` is a
+pure function of its inputs with no DOM access, which is why `test/run-tests.js`
+can exercise 240 tests directly under Node with no browser and no test
+framework. `js/ui` is a thin wiring layer: read inputs, call a lib function,
+render the result. Logic never lives there.
+
+### Two engines, deliberately separate
+
+```
+  ┌──────────────────────────────┐   ┌────────────────────────────────┐
+  │ OWN ENGINE                   │   │ CYBERCHEF ENGINE               │
+  │ js/lib/recipe.js             │   │ js/vendor/cyberchef-core.js    │
+  │                              │   │                                │
+  │ 55 operations                │   │ 505 operations                 │
+  │ { id, name, category,        │   │ Crown Copyright, Apache-2.0    │
+  │   params, run(input,params) }│   │ 23 MB, LAZY-LOADED on first    │
+  │                              │   │ open — never on page load      │
+  │ ~40 KB, always available     │   │                                │
+  └──────────────────────────────┘   └────────────────────────────────┘
+            │                                      │
+            └──────────────┬───────────────────────┘
+                           ▼
+              both drive the same UI idiom:
+              search → stack operations → per-step output
+```
+
+The toolkit's own recipe engine and the CyberChef engine are independent and
+neither depends on the other. The 23 MB CyberChef bundle is injected by
+`<script>` on first use, so a visitor who never opens that tool never downloads
+it — page load stays at roughly 108 KB.
+
+CyberChef refuses to hydrate an operation given no arguments, so the wrapper
+resolves each operation's declared default by type and lets callers override
+positionally or by name. See `js/vendor/CYBERCHEF-NOTICE.txt` for the build
+recipe and the statement of changes required by Apache-2.0.
+
+### Navigation
+
+The URL hash is the single source of truth. `#recipe-chain`, `#cyberchef`,
+`#aes` and so on each address one tool; direct links, bookmarks and browser
+back/forward all behave correctly because nothing else holds navigation state.
+Collapsible group state persists to `localStorage`; the quick-search (`/`)
+filters across every tool by name.
+
+### Testing
+
+```
+  test/run-tests.js     240 tests, node --test, no framework, no browser
+        │
+        ├── round-trip     encode → decode returns the original
+        ├── known-answer   RFC 4648 · FIPS 180-4 · RFC 1321 · RFC 4231 ·
+        │                  FIPS 202 · RFC 3492 published vectors
+        └── catalogue      every registered recipe operation runs, has a
+                           unique id, a name, a category, and only
+                           string/number param defaults so the UI can
+                           always render an input for it
+```
+
+Tests import `js/lib/*` directly. Because that layer is DOM-free there is
+nothing to mock and no jsdom involved — the tests run against exactly the code
+the browser runs.
+
+### Cryptography policy
+
+Anything Web Crypto supports uses `crypto.subtle` and never a hand-rolled
+implementation: AES-GCM, RSA-OAEP, HMAC, SHA-1/256/384/512. The hand-written
+primitives in `js/lib/vendor/` exist only because Web Crypto does not offer
+them, and none is security-critical — MD5 and CRC32 are legacy checksums,
+never used where resistance to attack matters.
+
+### Privacy
+
+Everything runs in the browser. The only outbound requests are the handful of
+clearly-disclosed lookups that cannot work otherwise — DNS-over-HTTPS for the
+email-authentication tools, and the HIBP range API, which is k-anonymous by
+design and never receives a full password hash. No analytics on tool pages, no
+input leaves the tab.
+
+### Implementation notes
+
+
 - No build step. `index.html` loads `js/app.js` as an ES module; everything
   else is plain ES modules imported from there.
 - **v4 navigation (10 sections):** the sidebar is a pinned Recipe Builder
