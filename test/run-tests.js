@@ -35,7 +35,8 @@ import { lookupHashInDemoWordlist, SUPPORTED_ALGORITHMS } from '../js/lib/wordli
 import { COMMON_PASSWORDS_DEMO } from '../data/common-passwords.js';
 import { parseDnsResponse, parseRdapResponse, parseIpGeoResponse, buildDnsUrl, buildRdapUrl, buildIpGeoUrl, lookupWhois, lookupDns, isPlausibleDomain } from '../js/lib/net-lookups.js';
 import { crackTimeLog10Seconds, humanizeLog10Seconds, verdictBand, assessStrength, ATTACKER_TIERS } from '../js/lib/crack-time.js';
-import { crackHashes, detectHashType } from '../js/lib/hash-cracker.js';
+import { crackHashes, crackHashesFromWordlist, detectHashType } from '../js/lib/hash-cracker.js';
+import { parseWordlistText } from '../js/lib/seclists-wordlist.js';
 
 import { qrEncode, QR_CAPACITY } from '../js/lib/qr-encode.js';
 import { qrDecode } from '../js/lib/qr-decode.js';
@@ -2534,6 +2535,87 @@ test('hash-cracker: reports not-found for a hash whose plaintext is not in the w
 
 test('hash-cracker: rejects mixed hash lengths in one batch', async () => {
   await assert.rejects(() => crackHashes([md5Hex('password'), 'a'.repeat(64)]), /one hash type at a time/);
+});
+
+// ---------------------------------------------------------------------------
+// hash-cracker.js — big-tier (crackHashesFromWordlist): the injected-wordlist
+// path used by the SecLists tier. No fetch involved here — the array is
+// provided directly, exactly as js/lib/hash-cracker-worker.js provides it
+// after loading the real file. Kept separate from the quick-tier tests above
+// so this stays fast and has no I/O dependency.
+// ---------------------------------------------------------------------------
+test('hash-cracker: crackHashesFromWordlist cracks a verbatim entry from an arbitrary injected word list', async () => {
+  const words = ['zzzFixtureBaseOne', 'zzzFixtureBaseTwo', 'CorrectHorseBattery9'];
+  const out = await crackHashesFromWordlist([md5Hex('CorrectHorseBattery9')], words);
+  assert.equal(out.type, 'MD5');
+  assert.equal(out.results[0].plaintext, 'CorrectHorseBattery9');
+});
+
+test('hash-cracker: crackHashesFromWordlist applies the same mangling rules (case + suffix) as the quick tier', async () => {
+  const out = await crackHashesFromWordlist([md5Hex('Zzzfixtureword2024')], ['zzzfixtureword']);
+  assert.equal(out.results[0].plaintext, 'Zzzfixtureword2024');
+});
+
+test('hash-cracker: crackHashesFromWordlist reports not-found for a word absent from the injected list', async () => {
+  const out = await crackHashesFromWordlist([md5Hex('totally-absent-plaintext')], ['zzzFixtureBaseOne']);
+  assert.equal(out.results[0].plaintext, null);
+});
+
+test('hash-cracker: crackHashesFromWordlist rejects mixed hash lengths, same as the quick tier', async () => {
+  await assert.rejects(
+    () => crackHashesFromWordlist([md5Hex('zzzFixtureBaseOne'), 'a'.repeat(64)], ['zzzFixtureBaseOne']),
+    /one hash type at a time/
+  );
+});
+
+// ---------------------------------------------------------------------------
+// seclists-wordlist.js + the actual shipped data/seclists-top100k.txt —
+// proves the real vendored corpus is well-formed AND that it genuinely
+// extends cracking power beyond the quick tier (the whole point of this
+// integration). No network fetch in tests: the file is read straight off
+// disk with node:fs, exactly as it will be served as a static asset.
+// ---------------------------------------------------------------------------
+test('seclists-wordlist: parseWordlistText trims, drops blanks, and preserves order', () => {
+  assert.deepEqual(parseWordlistText('alpha\nbeta \n\n  gamma\n'), ['alpha', 'beta', 'gamma']);
+});
+
+test('seclists-wordlist: the shipped data/seclists-top100k.txt is well-formed', async () => {
+  const fs = await import('node:fs');
+  const text = fs.readFileSync(new URL('../data/seclists-top100k.txt', import.meta.url), 'utf8');
+  const words = parseWordlistText(text);
+  // No hardcoded exact count (the list can be swapped for a larger/different
+  // cut later, per README) — just a sanity floor that this is genuinely a
+  // large corpus, not an accidentally-truncated file.
+  assert.ok(words.length > 90000, `expected a substantial breached-password corpus, got ${words.length} entries`);
+  assert.ok(words.includes('123456'), 'the single most common breached password should be present');
+  assert.ok(words.every((w) => w.length > 0), 'no blank entries should survive parsing');
+});
+
+test('hash-cracker + seclists: cracks a real hash whose plaintext is deep in the SecLists corpus and unreachable by the quick tier', async () => {
+  const fs = await import('node:fs');
+  const text = fs.readFileSync(new URL('../data/seclists-top100k.txt', import.meta.url), 'utf8');
+  const allWords = parseWordlistText(text);
+
+  // Deep into the list (rank ~50,000) — nowhere near the 300 curated
+  // passwords or the 7,776-word diceware list the quick tier uses, and not
+  // producible by the quick tier's case/leetspeak/suffix rules either.
+  const targetIndex = 50000;
+  const target = allWords[targetIndex];
+  assert.ok(target, 'fixture index must exist in the shipped file');
+  const targetHash = md5Hex(target);
+
+  const quickAttempt = await crackHashes([targetHash]);
+  assert.equal(
+    quickAttempt.results[0].plaintext,
+    null,
+    `"${target}" must NOT be crackable by the quick (300 + diceware) tier for this test to prove the big tier adds real power`
+  );
+
+  // A realistic slice of the real shipped corpus around the target, run
+  // through the exact function the Worker calls for the big tier.
+  const slice = allWords.slice(targetIndex - 1000, targetIndex + 1000);
+  const bigAttempt = await crackHashesFromWordlist([targetHash], slice);
+  assert.equal(bigAttempt.results[0].plaintext, target);
 });
 
 // ---------------------------------------------------------------------------

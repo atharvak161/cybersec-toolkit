@@ -1,5 +1,6 @@
 import * as hashing from '../lib/hashing.js';
-import { crackHashes, detectHashType } from '../lib/hash-cracker.js';
+import { crackHashes, crackHashesFromWordlist, detectHashType } from '../lib/hash-cracker.js';
+import { loadSeclistsWordlist, SECLISTS_SOURCE_URL } from '../lib/seclists-wordlist.js';
 import { el, toolHeader, clear, resultLine, showError, copyButton } from './helpers.js';
 
 export const HASHING_TOOLS = [
@@ -8,49 +9,146 @@ export const HASHING_TOOLS = [
     name: 'Hash Cracker',
     render(container) {
       clear(container);
-      container.appendChild(toolHeader('Recovers the plaintext behind MD5, SHA-1, SHA-256, and SHA-512 hashes with a real dictionary + rules attack, entirely in your browser. Paste one hash or many (one per line). It catches common and weak passwords — it can’t replicate a service like CrackStation’s multi-hundred-GB server table, and salted or bcrypt/argon2 hashes are out of reach by design.'));
+      container.appendChild(toolHeader(
+        'Recovers the plaintext behind MD5, SHA-1, SHA-256, and SHA-512 hashes with a real dictionary + rules '
+        + 'attack, entirely in your browser. Paste one hash or many (one per line). Two tiers, run in order: an '
+        + 'instant pass over ~8,000 curated common passwords, then — only if that misses — a pass over '
+        + '100,000 real breached passwords from SecLists (fetched on demand, never on page load; MIT-licensed, '
+        + 'see the credit below), both with case, leetspeak, and suffix variants. That is a genuinely useful '
+        + 'dictionary attack, not a toy — but it is still not CrackStation’s multi-hundred-GB server-side table, '
+        + 'and salted or bcrypt/argon2 hashes are out of reach by design (this is unsalted-hash cracking only). '
+        + 'The big-tier pass runs in a background Web Worker so the page stays responsive, and you can cancel it '
+        + 'at any time.'
+      ));
 
       const input = el('textarea', { rows: '4', placeholder: 'Paste one or more hashes, one per line\ne.g. 5f4dcc3b5aa765d61d8327deb882cf99', style: 'width:100%; font-family:var(--mono, monospace)', spellcheck: 'false' });
       const runBtn = el('button', { class: 'btn' }, 'Crack');
+      const cancelBtn = el('button', { class: 'btn secondary', style: 'display:none' }, 'Cancel');
       const status = el('div', { class: 'tool-desc', style: 'margin-top:6px' });
+      const progressWrap = el('div', { style: 'display:none; margin-top:10px' }, [
+        el('div', { class: 'cc-bar' }, [el('div', { class: 'cc-bar-fill', id: 'hc-prog' })]),
+        el('div', { class: 'tool-desc', id: 'hc-prog-label', style: 'margin-top:4px' }, '')
+      ]);
+      const progFill = progressWrap.querySelector('#hc-prog');
+      const progLabel = progressWrap.querySelector('#hc-prog-label');
       const resultsBox = el('div', {});
       const errorNode = el('div', {});
+      const credit = el('div', { class: 'tool-desc', style: 'margin-top:10px' }, [
+        'Big-tier wordlist: ',
+        el('a', { href: SECLISTS_SOURCE_URL, target: '_blank', rel: 'noopener' }, 'SecLists Common-Credentials'),
+        ' (Daniel Miessler, MIT). See ',
+        el('code', {}, 'data/SECLISTS-NOTICE.txt'),
+        ' for the full licence and provenance.'
+      ]);
 
-      runBtn.addEventListener('click', async () => {
+      let worker = null;
+      let cancelled = false;
+
+      function setRunning(on) {
+        runBtn.disabled = on;
+        runBtn.textContent = on ? 'Cracking…' : 'Crack';
+        cancelBtn.style.display = on ? '' : 'none';
+        progressWrap.style.display = on ? '' : 'none';
+        if (!on) { progFill.style.width = '0%'; progLabel.textContent = ''; }
+      }
+
+      function onWorkerMessage(msg, hashCount) {
+        if (msg.type === 'progress') {
+          const pct = msg.total ? Math.min(99, Math.round((msg.done / msg.total) * 100)) : 0;
+          progFill.style.width = `${pct}%`;
+          const tierLabel = msg.tier === 'big' ? 'Big tier (SecLists, 100k passwords)' : 'Quick tier (curated + diceware)';
+          progLabel.textContent = `${tierLabel} — ${msg.done.toLocaleString()} of ~${msg.total.toLocaleString()} candidates (${pct}%)`;
+          return;
+        }
+        if (msg.type === 'tier-done') {
+          if (msg.tier === 'quick' && msg.crackedCount < msg.totalCount) {
+            status.textContent = `Quick tier: ${msg.crackedCount} of ${msg.totalCount} cracked. Trying the big SecLists list for the rest — fetching it now (first use only)…`;
+          }
+          return;
+        }
+        if (msg.type === 'result') {
+          setRunning(false);
+          if (worker) { worker.terminate(); worker = null; }
+          if (!cancelled) showResult(msg.out, hashCount);
+          return;
+        }
+        if (msg.type === 'error') {
+          setRunning(false);
+          if (worker) { worker.terminate(); worker = null; }
+          showError(errorNode, new Error(msg.message));
+        }
+      }
+
+      function showResult(out, hashCount) {
+        const cracked = out.results.filter((r) => r.plaintext !== null).length;
+        const wordlistNote = out.wordlistSize
+          ? ` · big tier loaded ${out.wordlistSize.toLocaleString()} words`
+          : '';
+        status.textContent = `${out.type} · ${cracked} of ${hashCount} cracked · ${out.tried.toLocaleString()} candidates tried${wordlistNote}`;
+        const rows = out.results.map((r) => el('tr', { class: r.plaintext !== null ? 'hc-hit' : 'hc-miss' }, [
+          el('td', { class: 'hc-hash tabular-nums' }, r.hash),
+          el('td', { class: 'hc-plain' }, r.plaintext !== null ? r.plaintext : 'not found in either tier')
+        ]));
+        resultsBox.appendChild(el('table', { class: 'data-table hc-table' }, [
+          el('tr', {}, [el('th', {}, 'Hash'), el('th', {}, 'Plaintext')]),
+          ...rows
+        ]));
+        resultsBox.appendChild(el('div', { class: 'hc-note' }, 'Not cracked doesn’t mean uncrackable — it means the plaintext isn’t in either bundled wordlist or its common variations. A longer or randomly generated password, or a salted/bcrypt/argon2 hash, won’t appear here by design.'));
+      }
+
+      async function runSync(hashes, algorithm) {
+        // Fallback when Web Workers are unavailable: blocks the tab, so warn.
+        status.textContent = 'Running without a Web Worker — the tab may be unresponsive for a while…';
+        await new Promise((r) => setTimeout(r, 30));
+        try {
+          const quick = await crackHashes(hashes, { algorithm, onProgress: (done, total) => onWorkerMessage({ type: 'progress', tier: 'quick', done, total }) });
+          const missing = quick.results.filter((r) => r.plaintext === null).map((r) => r.hash);
+          if (!missing.length) { setRunning(false); showResult(quick, hashes.length); return; }
+          status.textContent = 'Quick tier missed some — loading the SecLists big list (first use only)…';
+          const words = await loadSeclistsWordlist();
+          const big = await crackHashesFromWordlist(missing, words, { algorithm: algorithm || quick.type, onProgress: (done, total) => onWorkerMessage({ type: 'progress', tier: 'big', done, total }) });
+          const bigByHash = new Map(big.results.map((r) => [r.hash, r.plaintext]));
+          const merged = quick.results.map((r) => r.plaintext !== null ? r : { hash: r.hash, plaintext: bigByHash.has(r.hash) ? bigByHash.get(r.hash) : null });
+          setRunning(false);
+          showResult({ type: quick.type, tried: quick.tried + big.tried, results: merged, wordlistSize: words.length }, hashes.length);
+        } catch (err) { setRunning(false); showError(errorNode, err); }
+      }
+
+      runBtn.addEventListener('click', () => {
         clear(errorNode); clear(resultsBox); clear(status);
         const hashes = input.value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
         if (!hashes.length) { showError(errorNode, new Error('Paste at least one hash.')); return; }
         const det = detectHashType(hashes[0]);
-        status.textContent = det ? `Detected ${det.name}. Cracking against the wordlist + rules…` : 'Cracking…';
-        runBtn.disabled = true;
+        status.textContent = det ? `Detected ${det.name}. Running the quick tier…` : 'Cracking…';
+        cancelled = false;
+        setRunning(true);
+
+        if (typeof Worker === 'undefined') { runSync(hashes, det ? det.name : undefined); return; }
         try {
-          const out = await crackHashes(hashes, {
-            onProgress: (done) => { status.textContent = `Trying candidates… ${done.toLocaleString()} hashed`; }
-          });
-          const cracked = out.results.filter((r) => r.plaintext !== null).length;
-          status.textContent = `${out.type} · ${cracked} of ${out.results.length} cracked · ${out.tried.toLocaleString()} candidates tried`;
-          const rows = out.results.map((r) => el('tr', { class: r.plaintext !== null ? 'hc-hit' : 'hc-miss' }, [
-            el('td', { class: 'hc-hash tabular-nums' }, r.hash),
-            el('td', { class: 'hc-plain' }, r.plaintext !== null ? r.plaintext : 'not found in wordlist + rules')
-          ]));
-          resultsBox.appendChild(el('table', { class: 'data-table hc-table' }, [
-            el('tr', {}, [el('th', {}, 'Hash'), el('th', {}, 'Plaintext')]),
-            ...rows
-          ]));
-          resultsBox.appendChild(el('div', { class: 'hc-note' }, 'Not cracked doesn’t mean uncrackable — it means the plaintext isn’t in this bundled wordlist or its common variations. A longer or random password, or a salted/bcrypt/argon2 hash, won’t appear here by design.'));
-        } catch (err) {
-          showError(errorNode, err);
-        } finally {
-          runBtn.disabled = false;
+          worker = new Worker(new URL('../lib/hash-cracker-worker.js', import.meta.url), { type: 'module' });
+        } catch {
+          worker = null; runSync(hashes, det ? det.name : undefined); return;
         }
+        worker.onmessage = (e) => onWorkerMessage(e.data, hashes.length);
+        worker.onerror = (e) => { setRunning(false); if (worker) { worker.terminate(); worker = null; } showError(errorNode, new Error(e.message || 'Worker failed')); };
+        worker.postMessage({ hashes, algorithm: det ? det.name : undefined });
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cancelled = true;
+        if (worker) { worker.terminate(); worker = null; }
+        setRunning(false);
+        status.textContent = 'Cancelled.';
       });
 
       container.appendChild(el('div', { class: 'card' }, [
         el('label', {}, 'Hash(es)'),
         input,
-        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn]),
+        el('div', { class: 'field-row', style: 'margin-top:10px' }, [runBtn, cancelBtn]),
         status,
-        errorNode
+        progressWrap,
+        errorNode,
+        credit
       ]));
       container.appendChild(resultsBox);
     }

@@ -339,6 +339,12 @@ scanner the way a production QR library is.
 |---|---|
 | Enigma Auto-Break (ciphertext-only cryptanalysis) | Working — recovers rotor order, start positions and plugboard from ciphertext **alone** (no key), then decrypts. Implements the modern IoC + hill-climb attack (Gillogly's method): Phase 1 ranks every rotor order × 26³ start positions by Index of Coincidence with the plugboard off; Phase 2 locally refines the ring settings; Phase 3 hill-climbs the Steckerbrett on English fitness. Runs the ~1–2M-decrypt search in a **Web Worker** with live progress (synchronous fallback if Workers are unavailable), so the tab stays responsive. Reuses the existing `enigmaProcess` simulator as its decryption primitive and the `english-fitness` scorer for ranking — no wiring is re-implemented. Scope/limits: models the 3-rotor Enigma I / M3 (wheels I–V, reflectors B/C); most reliable on messages ≳120 letters with rings at/near default; ciphertext-only recovery of a non-default Ringstellung is genuinely hard and best-effort — the same reason the wartime attack needed cribs and the Bombe. Naval M4 (4th rotor / thin reflectors) and double-notch wheels VI–VIII are not modelled. |
 
+### v6 (additive, same app)
+
+| Tool | Status |
+|---|---|
+| Hash Cracker — SecLists big tier | Working — a genuine two-tier client-side dictionary + rules attack against unsalted MD5/SHA-1/SHA-256/SHA-512. Tier 1 is the instant bundled 300-curated + 7,776-diceware quick pass; tier 2, run only if tier 1 misses, is 100,000 real breached passwords from [SecLists](https://github.com/danielmiessler/SecLists)' `Common-Credentials` list (MIT, Daniel Miessler) — see `data/SECLISTS-NOTICE.txt`. Both tiers apply the same case/leetspeak/suffix rules via one shared generator (`mangle()` in `js/lib/hash-cracker.js`). The 100k-word file (`data/seclists-top100k.txt`, 764 KB / ~365 KB gzipped) is fetched lazily on first crack — never on page load — and both tiers run in a **Web Worker** (`js/lib/hash-cracker-worker.js`) with live per-tier progress and a Cancel button, so the tab never freezes even at several-million-candidate scale (synchronous fallback with an unresponsive-tab warning if Workers are unavailable, same pattern as Enigma Auto-Break). Why 100k and not the full 1M/10M SecLists cut: password reuse is steeply Zipfian, so the top 100k captures the large majority of realistic hits while keeping the in-browser candidate space (100k × ~90 rule variants) hashable in a reasonable time; see `data/SECLISTS-NOTICE.txt` for the full reasoning and how to swap in a larger cut later. Still out of scope by design: salted hashes and bcrypt/argon2/PBKDF2 (this is unsalted-hash cracking only). |
+
 ## Running the tests
 
 ```
@@ -374,3 +380,9 @@ operations run unmodified; only the surrounding interface is this project's.
 
 Full licence: `js/vendor/CYBERCHEF-LICENSE.txt`
 Attribution and statement of build-time changes: `js/vendor/CYBERCHEF-NOTICE.txt`
+
+The Hash Cracker's big tier bundles a 100,000-entry cut of
+[SecLists](https://github.com/danielmiessler/SecLists)' `Common-Credentials/xato-net-10-million-passwords-100000.txt`
+(Copyright (c) 2018 Daniel Miessler), licensed under the MIT Licence, used
+byte-for-byte unmodified. Full licence, provenance, and why this cut and not
+a larger one: `data/SECLISTS-NOTICE.txt`.

@@ -1,0 +1,60 @@
+SecLists — Common-Credentials
+Copyright (c) 2018 Daniel Miessler
+Licensed under the MIT License.
+
+Source project: https://github.com/danielmiessler/SecLists
+Source file:    Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt
+Upstream data:  xato.net "Ten Million Passwords" (2015) — real passwords recovered
+                from public breach corpora, deduplicated and ranked by frequency.
+                https://web.archive.org/web/20150211131735/https://xato.net/passwords/ten-million-passwords/
+
+WHAT IS INCLUDED
+  data/seclists-top100k.txt is an unmodified copy of SecLists' own
+  pre-truncated "top 100,000" cut of the 1,000,000-password xato-net list —
+  the 100,000 most frequently occurring real passwords, one per line, ranked
+  most-to-least common. Byte-for-byte identical to the upstream file
+  (verified by checksum at vendor time); nothing has been re-sorted, filtered,
+  or edited.
+
+WHY THE 100K CUT AND NOT THE FULL 1M OR 10M LIST
+  Password reuse follows a steep frequency curve: a small number of passwords
+  account for a large share of real-world accounts, with rapidly diminishing
+  returns per additional entry further down the list. The 100k cut keeps
+  the overwhelming majority of that cracking power while keeping the
+  in-browser candidate space (100k words x case/leetspeak variants x
+  suffixes) tractable to hash client-side in a Web Worker with live progress
+  and cancellation. The full 1,000,000-line list (~8.2 MB) would roughly
+  10x the candidate space for a proportionally much smaller hit-rate gain;
+  the 10,000,000-line list (~48 MB) is not viable to ship or hash client-side
+  at all. See README.md for the full reasoning and how to swap in a larger
+  cut later (js/lib/seclists-wordlist.js is the only file that names the path).
+
+LOADING
+  Fetched lazily over HTTP the first time a hash-cracking run actually needs
+  it (never on page load, never bundled into a JS module). Served as plain
+  text so GitHub Pages' gzip transfer-encoding compresses it effectively
+  (~365 KB over the wire for the 764 KB file, measured with gzip -9).
+
+LICENSE — MIT (verbatim from SecLists' own LICENSE file)
+
+MIT License
+
+Copyright (c) 2018 Daniel Miessler
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
